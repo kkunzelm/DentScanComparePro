@@ -88,7 +88,7 @@ study.yaml (config) + STL files → BatchRunner → CSV metrics output
 
 ## Coding Standards
 
-- C++17 standard
+- C++17 standard, C++20 possible
 - Use `std::shared_ptr` for mesh data
 - Use Qt signals/slots for async operations
 - Keep computation in `src/core/` and `src/batch/` (no Qt GUI dependencies)

@@ -11,10 +11,10 @@
 #include <QCommandLineOption>
 #include <iostream>
 
+#include "batch/BatchRunner.h"
+#include "config/StudyConfig.h"
 // TODO: Uncomment as implementations are added
 // #include "gui/MainWindow.h"
-// #include "batch/BatchRunner.h"
-// #include "config/StudyConfig.h"
 
 int main(int argc, char *argv[])
 {
@@ -72,9 +72,9 @@ int main(int argc, char *argv[])
     );
     parser.addOption(parallelOption);
 
-    // Verbose output
+    // Verbose output (no short option to avoid conflict with --version)
     QCommandLineOption verboseOption(
-        QStringList() << "v" << "verbose",
+        "verbose",
         "Print detailed progress information."
     );
     parser.addOption(verboseOption);
@@ -107,16 +107,23 @@ int main(int argc, char *argv[])
         std::cout << "Study file:  " << studyPath.toStdString() << "\n";
         std::cout << "Data root:   " << dataRoot.toStdString() << "\n";
         std::cout << "Output dir:  " << outputDir.toStdString() << "\n";
-        std::cout << "\n";
+        std::cout << "\n" << std::flush;
 
-        // TODO: Implement batch processing
-        // StudyConfig config = StudyConfig::loadFromYAML(studyPath);
-        // BatchRunner runner(config, dataRoot, outputDir);
-        // runner.setVerbose(verbose);
-        // return runner.run() ? 0 : 1;
+        try {
+            std::cout << "Loading configuration..." << std::flush;
+            DentScanBatch::StudyConfig config = DentScanBatch::StudyConfig::loadFromFile(studyPath);
+            std::cout << " done.\n";
+            std::cout << "Study: " << config.name.toStdString() << "\n\n" << std::flush;
 
-        std::cout << "[NOT YET IMPLEMENTED] Batch processing would run here.\n";
-        return 0;
+            DentScanBatch::BatchRunner runner;
+            runner.setVerbose(verbose);
+
+            bool success = runner.run(config, dataRoot, outputDir);
+            return success ? 0 : 1;
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+            return 1;
+        }
 
     } else {
         // === GUI MODE ===
