@@ -22,6 +22,17 @@ QString CSVWriter::escapeCSV(const QString& str) {
     return str;
 }
 
+void CSVWriter::writeTruenessHeader(QTextStream& out) {
+    out << "Observation_ID,Scanner_Model,SKD_Value,Repetition_ID,"
+        << "Trueness_RMS_mm,Trueness_MeanAbs_mm,Trueness_Max_mm,Trueness_P95_mm,"
+        << "Signed_Mean_mm,Coverage_Rate_pct,Vertices_Included,Vertices_Total,File_Path\n";
+}
+
+void CSVWriter::writePrecisionHeader(QTextStream& out) {
+    out << "Scanner_Model,SKD_Value,Precision_MeanRMS_mm,Precision_SD_mm,"
+        << "Coefficient_of_Variation,Pairwise_Count\n";
+}
+
 bool CSVWriter::writeTruenessCSV(
     const std::vector<BatchMetricReport>& reports,
     const QString& filePath)
@@ -35,12 +46,56 @@ bool CSVWriter::writeTruenessCSV(
     QTextStream out(&file);
 
     // Header
-    out << "Observation_ID,Scanner_Model,SKD_Value,Repetition_ID,"
-        << "Trueness_RMS_mm,Trueness_MeanAbs_mm,Trueness_Max_mm,Trueness_P95_mm,"
-        << "Signed_Mean_mm,Coverage_Rate_pct,Vertices_Included,Vertices_Total,File_Path\n";
+    writeTruenessHeader(out);
 
     // Data rows
     int obsId = 1;
+    for (const auto& report : reports) {
+        out << obsId++ << ","
+            << escapeCSV(QString::fromStdString(report.scannerName)) << ","
+            << report.skd_mm << ","
+            << report.repetitionId << ","
+            << QString::number(report.rmsDistance, 'f', 4) << ","
+            << QString::number(report.madDistance, 'f', 4) << ","
+            << QString::number(report.hausdorff100, 'f', 4) << ","
+            << QString::number(report.hausdorff95, 'f', 4) << ","
+            << QString::number(report.signedMean, 'f', 4) << ","
+            << QString::number(report.coverageRate, 'f', 2) << ","
+            << report.verticesIncluded << ","
+            << report.verticesTotal << ","
+            << escapeCSV(report.filePath) << "\n";
+    }
+
+    return true;
+}
+
+bool CSVWriter::appendTruenessCSV(
+    const std::vector<BatchMetricReport>& reports,
+    const QString& filePath,
+    int startObsId)
+{
+    bool fileExists = QFile::exists(filePath);
+
+    QFile file(filePath);
+    QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text;
+    if (fileExists) {
+        mode |= QIODevice::Append;
+    }
+
+    if (!file.open(mode)) {
+        return false;
+    }
+
+    QTextStream out(&file);
+
+    // Write header only if new file
+    if (!fileExists) {
+        writeBOM(file);
+        writeTruenessHeader(out);
+    }
+
+    // Data rows
+    int obsId = startObsId;
     for (const auto& report : reports) {
         out << obsId++ << ","
             << escapeCSV(QString::fromStdString(report.scannerName)) << ","
@@ -73,8 +128,44 @@ bool CSVWriter::writePrecisionCSV(
     QTextStream out(&file);
 
     // Header
-    out << "Scanner_Model,SKD_Value,Precision_MeanRMS_mm,Precision_SD_mm,"
-        << "Coefficient_of_Variation,Pairwise_Count\n";
+    writePrecisionHeader(out);
+
+    // Data rows
+    for (const auto& report : reports) {
+        out << escapeCSV(report.scannerId) << ","
+            << report.skd_mm << ","
+            << QString::number(report.meanRMS, 'f', 4) << ","
+            << QString::number(report.sdRMS, 'f', 4) << ","
+            << QString::number(report.cv, 'f', 4) << ","
+            << report.pairwiseCount << "\n";
+    }
+
+    return true;
+}
+
+bool CSVWriter::appendPrecisionCSV(
+    const std::vector<PrecisionReport>& reports,
+    const QString& filePath)
+{
+    bool fileExists = QFile::exists(filePath);
+
+    QFile file(filePath);
+    QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text;
+    if (fileExists) {
+        mode |= QIODevice::Append;
+    }
+
+    if (!file.open(mode)) {
+        return false;
+    }
+
+    QTextStream out(&file);
+
+    // Write header only if new file
+    if (!fileExists) {
+        writeBOM(file);
+        writePrecisionHeader(out);
+    }
 
     // Data rows
     for (const auto& report : reports) {
@@ -195,6 +286,40 @@ QStringList CSVWriter::writeAll(
     QString summaryPath = dir.filePath(summaryFilename);
     if (!writeSummaryCSV(allTrueness, summaryPath)) {
         errors.append(QString("Failed to write: %1").arg(summaryPath));
+    }
+
+    return errors;
+}
+
+QStringList CSVWriter::appendGroupResult(
+    const GroupResult& result,
+    const QString& outputDir,
+    const QString& metricsFilename,
+    const QString& precisionFilename,
+    int& currentObsId)
+{
+    QStringList errors;
+
+    // Create output directory if needed
+    QDir dir(outputDir);
+    if (!dir.exists()) {
+        if (!dir.mkpath(".")) {
+            errors.append(QString("Cannot create output directory: %1").arg(outputDir));
+            return errors;
+        }
+    }
+
+    // Append trueness metrics
+    QString metricsPath = dir.filePath(metricsFilename);
+    if (!appendTruenessCSV(result.truenessReports, metricsPath, currentObsId)) {
+        errors.append(QString("Failed to append to: %1").arg(metricsPath));
+    }
+    currentObsId += static_cast<int>(result.truenessReports.size());
+
+    // Append precision metrics
+    QString precisionPath = dir.filePath(precisionFilename);
+    if (!appendPrecisionCSV(result.precisionReports, precisionPath)) {
+        errors.append(QString("Failed to append to: %1").arg(precisionPath));
     }
 
     return errors;

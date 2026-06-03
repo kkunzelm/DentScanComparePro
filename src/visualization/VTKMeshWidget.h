@@ -75,6 +75,13 @@ public:
     void showToothSegmentation(const std::shared_ptr<ScanData>& scan,
                                const std::vector<bool>& toothMask);
 
+    // Show a wireframe bounding box with the given min/max coordinates.
+    void showBoundingBox(const std::array<double, 3>& minPt,
+                         const std::array<double, 3>& maxPt);
+
+    // Hide the bounding box wireframe.
+    void hideBoundingBox();
+
 signals:
     // Emitted when the user left-clicks a surface in pick mode.
     void pointPicked(double x, double y, double z);
@@ -103,6 +110,7 @@ private:
     std::vector<vtkSmartPointer<vtkActor>> m_overlayActors;
     std::vector<vtkSmartPointer<vtkActor>> m_sphereActors; // seed point spheres
     std::vector<vtkSmartPointer<vtkActor>> m_planeActors;  // three occlusal disks
+    vtkSmartPointer<vtkActor>              m_bboxActor;    // wireframe bounding box
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;

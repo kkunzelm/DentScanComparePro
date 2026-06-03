@@ -12,6 +12,7 @@ namespace DentScanBatch {
 /**
  * CSV file writer with UTF-8 BOM support for Windows compatibility.
  * Outputs metrics in long format suitable for statistical analysis.
+ * Supports both full write and incremental append modes.
  */
 class CSVWriter {
 public:
@@ -27,6 +28,18 @@ public:
         const QString& filePath);
 
     /**
+     * Append trueness metrics to an existing CSV file (or create if doesn't exist).
+     * @param reports Trueness reports to append
+     * @param filePath Output file path
+     * @param startObsId Starting observation ID for this batch
+     * @return True if successful
+     */
+    static bool appendTruenessCSV(
+        const std::vector<BatchMetricReport>& reports,
+        const QString& filePath,
+        int startObsId = 1);
+
+    /**
      * Write precision metrics to CSV.
      * One row per scanner×SKD combination.
      * @param reports Precision reports from all groups
@@ -34,6 +47,16 @@ public:
      * @return True if successful
      */
     static bool writePrecisionCSV(
+        const std::vector<PrecisionReport>& reports,
+        const QString& filePath);
+
+    /**
+     * Append precision metrics to an existing CSV file (or create if doesn't exist).
+     * @param reports Precision reports to append
+     * @param filePath Output file path
+     * @return True if successful
+     */
+    static bool appendPrecisionCSV(
         const std::vector<PrecisionReport>& reports,
         const QString& filePath);
 
@@ -63,12 +86,35 @@ public:
         const QString& precisionFilename = "precision_matrix.csv",
         const QString& summaryFilename = "summary_by_scanner_skd.csv");
 
+    /**
+     * Append a single group's results to existing CSV files.
+     * Creates files with headers if they don't exist.
+     * @param result Single group result to append
+     * @param outputDir Output directory
+     * @param metricsFilename Name for metrics CSV
+     * @param precisionFilename Name for precision CSV
+     * @param currentObsId Current observation ID counter (updated on return)
+     * @return List of errors (empty if successful)
+     */
+    static QStringList appendGroupResult(
+        const GroupResult& result,
+        const QString& outputDir,
+        const QString& metricsFilename,
+        const QString& precisionFilename,
+        int& currentObsId);
+
 private:
     // Write UTF-8 BOM for Windows Excel compatibility
     static void writeBOM(QFile& file);
 
     // Escape a string for CSV (quote if contains comma, quote, or newline)
     static QString escapeCSV(const QString& str);
+
+    // Write trueness CSV header
+    static void writeTruenessHeader(QTextStream& out);
+
+    // Write precision CSV header
+    static void writePrecisionHeader(QTextStream& out);
 };
 
 } // namespace DentScanBatch

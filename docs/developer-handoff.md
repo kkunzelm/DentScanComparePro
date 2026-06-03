@@ -62,16 +62,18 @@ src/
 │   ├── CurvatureAnalysis.{h,cpp}   CGAL interpolated curvatures
 │   ├── ICPRegistration.{h,cpp}     Point-to-plane ICP (nanoflann + Eigen)
 │   ├── GPAReference.{h,cpp}        GPA: PCA → 4-orient test → ICP → mean mesh
-│   └── DistanceField.{h,cpp}       CGAL AABB-tree → per-vertex signed distances
+│   ├── DistanceField.{h,cpp}       CGAL AABB-tree → per-vertex signed distances
+│   └── ToothSegmentation.{h,cpp}   Dijkstra-based crown segmentation from seed points
 ├── config/                     Configuration parsing
-│   ├── ROIConfig.h             ROI structures (bbox, Z-plane, brush zones)
+│   ├── ROIConfig.{h,cpp}       ROI structures + ROITemplate JSON I/O
 │   ├── StudyConfig.{h,cpp}     JSON/YAML study configuration
 │   └── FileDiscovery.{h,cpp}   Glob pattern file discovery
 ├── batch/                      Batch processing
 │   ├── BatchRunner.{h,cpp}     Orchestrates all group processing
 │   ├── GroupProcessor.{h,cpp}  Processes one SKD group
 │   └── CSVWriter.{h,cpp}       Output CSV files
-├── gui/                        (Future) Interactive ROI template editor
+├── gui/                        Interactive ROI template editor
+│   └── MainWindow.{h,cpp}      Main window with tabs for config, ROI, batch, results
 └── visualization/              VTK rendering (copied from DentScanCompare)
     ├── VTKMeshWidget.{h,cpp}
     └── ColorMapLUT.{h,cpp}
@@ -100,6 +102,29 @@ CGAL AABB tree on GPA mean. Per vertex: closest point + primitive, signed by dot
 - `compute(scan, reference)` – Stores distances in `scan.distanceToRef`
 - `computePairwise(sourceMesh, targetMesh)` – Returns distance vector without modifying inputs (optimized for precision computation)
 - `fillReport(scan, report, ...)` – Computes RMS, MAD, Hausdorff metrics with optional filtering
+
+### 5. ToothSegmentation
+Dijkstra-based region growing from seed points on tooth cusps. Expands outward and stops at the gingival margin using curvature-weighted geodesic distance.
+
+**Parameters:**
+- `maxGeodesicMm` (default 12.0): Primary budget limit – stops expansion when accumulated curvature-weighted distance exceeds this value
+- `maxCreaseAngleDeg` (default 50°): Secondary hard stop at CEJ kink
+- `minMeanCurvature` (default -4.0): Secondary hard stop at concave gingival sulcus
+- `curvatureRepulsion` (default 0.1): Edge-cost scaling for concave zones (0 = disabled)
+
+**Edge Cost Formula:**
+```
+W(f,nb) = dist(centroid_f, centroid_nb) × (1 + curvatureRepulsion × max(0, -κ_min_avg))
+```
+
+Where κ_min = κ_H - √max(0, κ_H² - κ_G) is the minimum principal curvature, more sensitive at saddle-like CEJ geometry.
+
+**Usage:**
+```cpp
+ToothSegmentation::Params params;
+params.maxGeodesicMm = 12.0;
+std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoints, params);
+```
 
 ---
 
@@ -139,7 +164,35 @@ CGAL AABB tree on GPA mean. Per vertex: closest point + primitive, signed by dot
     --study ../data/study.json \
     --data-root /path/to/scanner/data \
     --output /path/to/results \
+    --roi-template roi_template.json \
     --verbose
+```
+
+**Options:**
+- `--batch` / `-b`: Run in headless CLI mode (no GUI)
+- `--study` / `-s`: Path to study configuration JSON file
+- `--data-root` / `-d`: Root directory containing scanner folders
+- `--output` / `-o`: Output directory for CSV files (default: ./results)
+- `--roi-template` / `-r`: Optional ROI template with tooth segmentation settings
+- `--verbose`: Print detailed progress information
+
+### Incremental Save & Resume
+
+The batch processor saves results incrementally after each SKD group completes:
+
+- **Automatic resume**: If the batch is interrupted, simply re-run the same command. Already-completed groups are skipped automatically.
+- **Progress tracking**: A `.batch_progress.json` file in the output directory tracks completed groups and the current observation ID.
+- **Incremental CSV**: Trueness and precision CSVs are appended to after each group (not rewritten from scratch).
+- **Safe interruption**: Progress is saved before exiting on cancel, so no work is lost.
+- **Clean completion**: The progress file is automatically deleted when all groups complete successfully.
+
+Example output during resume:
+```
+Resuming from previous run. Already completed: 3 groups.
+[1/7] Skipping SKD_18 (already completed)
+[2/7] Skipping SKD_20 (already completed)
+[3/7] Skipping SKD_22 (already completed)
+[4/7] Processing group SKD_24...
 ```
 
 ### Output Files
@@ -201,7 +254,7 @@ Original recursive glob implementation was extremely slow. Current implementatio
 
 ---
 
-## Current Status (as of 2026-06-02)
+## Current Status (as of 2026-06-03)
 
 ### Implemented
 - Full CLI batch mode with JSON configuration
@@ -211,27 +264,41 @@ Original recursive glob implementation was extremely slow. Current implementatio
 - Precision metrics (pairwise RMS between repetitions)
 - CSV output (metrics, precision, summary)
 - Optimized `computePairwise()` for efficient precision computation
+- **ROI filtering fully integrated** (bbox, Z-plane, brush zones, sigma clipping)
+- **GUI mode with MainWindow** - tabbed interface for:
+  - Study configuration loading and overview
+  - ROI Template Editor with interactive 3D visualization
+  - Batch processing with progress monitoring
+  - Results file browser with CSV preview
+- Full multi-scanner batch configuration (`data/full_study.json`)
+- **Tooth segmentation** - Dijkstra-based crown region growing:
+  - Interactive seed point placement on tooth cusps
+  - Curvature-weighted geodesic expansion
+  - Parameters: geodesic limit, crease angle, curvature thresholds
+  - Combinable with other ROI filters (bbox, Z-plane, brush, sigma)
+- **ROI template batch integration** (`--roi-template` CLI option):
+  - Load ROI template with tooth segmentation seeds
+  - Apply tooth masks to all scans in batch mode
+  - Seeds snapped to nearest mesh vertices after GPA alignment
 
-### Test Results (5 Primescan scans, SKD 20)
-- Trueness RMS: 0.032–0.074 mm
-- Precision Mean RMS: 0.269 mm (10 pairwise comparisons)
-- Processing time: ~30 seconds for 5 scans
+### Test Results (Full study: 6 scanners × 7 SKD levels)
+- 185 scans total (5 repetitions per scanner per SKD)
+- SKD 18: 5 iTeroLumina scans only
+- SKD 20-30: 30 scans each (all 6 scanners)
+- Trueness RMS: 0.032–0.074 mm (typical range)
+- Precision Mean RMS: ~0.27 mm (pairwise comparisons)
 
 ### Not Yet Implemented
-- GUI mode (ROI Template Editor)
 - YAML configuration support (JSON only currently working)
-- ROI filtering (bbox, Z-plane, brush zones, sigma clipping)
-- Tooth segmentation integration
-- Multi-scanner full batch run (only tested with single scanner)
+- Statistical output enhancement (R-ready format, effect sizes)
 
 ---
 
 ## Next Steps
 
-1. **Full multi-scanner test**: Create configuration for all 6 scanners and all SKD levels
-2. **ROI integration**: Connect ROIConfig filtering to GroupProcessor
-3. **GUI development**: Phase 4 from implementation plan – ROI Template Editor
-4. **Tooth segmentation**: Port ToothSegmentation from DentScanCompare for anatomical ROI
+1. **Statistical enhancements**: Add R-ready output format, compute effect sizes
+2. **GUI refinements**: Progress signals from BatchRunner to GUI, better error handling
+3. **Occlusal plane in batch mode**: Currently GUI-only; save/load plane definition in ROI template
 
 ---
 
@@ -245,6 +312,71 @@ Original recursive glob implementation was extremely slow. Current implementatio
 ---
 
 ## Changelog
+
+### 2026-06-03 – ROI template batch integration + GUI improvements
+
+**Batch Integration:**
+- Added `--roi-template` / `-r` CLI option to specify ROI template JSON file
+- GroupProcessor now accepts optional `ROITemplate` parameter
+- Tooth segmentation seeds are snapped to nearest mesh vertices in each scan after GPA alignment
+- Both trueness and precision metrics use the combined ROI + tooth mask
+
+**GUI Improvements:**
+
+1. **Occlusal Plane Picking (Z-Plane Slab)**
+   - New "Pick Plane (3 pts)" button to define occlusal plane from 3 points
+   - Cross product computes plane normal, ensured to point upward (+Z)
+   - Status label shows "Plane: auto (max-Z)" or "Plane: defined at Z=X.X"
+   - "Clear" button resets to automatic max-Z detection
+
+2. **Bounding Box Visualization**
+   - Orange wireframe box now displayed when "Active" checkbox is checked
+   - Uses VTK `vtkOutlineFilter` for efficient edge rendering
+
+3. **Brush Tool for Tooth Mask Editing**
+   - New checkbox "Edit tooth mask (not ROI zones)"
+   - When checked: brush clicks directly modify the tooth mask (add/remove vertices)
+   - When unchecked: brush creates ROI zones (original behavior)
+   - Status bar shows count of modified vertices
+
+4. **Outlier Removal Clarification**
+   - Updated tooltip on sigma threshold to explain:
+     - Applied during METRIC COMPUTATION (not segmentation)
+     - Removes vertices whose signed distance exceeds σ standard deviations
+     - Set to 0 to disable
+
+**Technical Changes:**
+- VTKMeshWidget: Added `showBoundingBox()` and `hideBoundingBox()` methods
+- CMakeLists.txt: Added `FiltersSources` and `FiltersModeling` VTK components
+- MainWindow: New slots for occlusal plane picking and tooth mask brush editing
+
+### 2026-06-03 – Incremental save and resume capability
+- BatchRunner now saves results after each group completes (not just at the end)
+- Progress tracked in `.batch_progress.json` file in output directory
+- On restart, automatically resumes from where it left off
+- Skips already-completed groups, continues with remaining groups
+- Progress file automatically deleted on successful completion
+- CSVWriter gains `appendTruenessCSV`, `appendPrecisionCSV`, `appendGroupResult` methods
+
+### 2026-06-03 – Tooth segmentation integration
+- Ported `ToothSegmentation.{h,cpp}` from DentScanCompare
+- Added tooth segmentation UI to ROI Template Editor:
+  - Seed point picking mode (place seeds on tooth cusps)
+  - Segmentation parameters (geodesic limit, crease angle, curvature thresholds)
+  - Run segmentation button computes tooth mask
+  - "Use tooth mask as ROI" checkbox combines with other ROI filters
+- ROI templates now save/load tooth segmentation seeds and parameters
+- Visualization shows combined ROI mask (geometric + tooth segmentation)
+
+### 2026-06-03 – GUI mode implementation
+- Created `src/gui/MainWindow.{h,cpp}` with tabbed interface:
+  - **Study Configuration tab**: Load JSON config, browse data root/output dirs, tree view of scanners/groups
+  - **ROI Template Editor tab**: Load template scan, 3D VTK view, bounding box/Z-plane/brush controls, save/load ROI templates
+  - **Batch Processing tab**: Run/cancel buttons, progress bars, processing log
+  - **Results tab**: File browser, CSV preview
+- Updated `main.cpp` to launch GUI mode by default, CLI mode with `--batch` flag
+- ROI filtering already integrated in GroupProcessor (confirmed working)
+- Created `data/full_study.json` for complete 6-scanner × 7-SKD evaluation
 
 ### 2026-06-02 – Precision optimization + batch completion
 - Added `DistanceField::computePairwise()` for efficient pairwise distance computation

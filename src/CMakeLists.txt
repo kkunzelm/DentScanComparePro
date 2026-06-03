@@ -5,6 +5,7 @@ set(CORE_SOURCES
     core/ICPRegistration.cpp
     core/GPAReference.cpp
     core/DistanceField.cpp
+    core/ToothSegmentation.cpp
 )
 
 # Visualization sources (reused from DentScanCompare)
@@ -17,6 +18,7 @@ set(VIS_SOURCES
 set(CONFIG_SOURCES
     config/StudyConfig.cpp
     config/FileDiscovery.cpp
+    config/ROIConfig.cpp
 )
 
 # Batch processing sources
@@ -28,10 +30,7 @@ set(BATCH_SOURCES
 
 # GUI sources
 set(GUI_SOURCES
-    # gui/MainWindow.cpp
-    # gui/TemplateEditorTab.cpp
-    # gui/BatchRunnerTab.cpp
-    # gui/BrushTool.cpp
+    gui/MainWindow.cpp
 )
 
 set(SOURCES

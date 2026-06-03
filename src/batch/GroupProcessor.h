@@ -3,13 +3,16 @@
 
 #include "../config/StudyConfig.h"
 #include "../config/FileDiscovery.h"
+#include "../config/ROIConfig.h"
 #include "../core/Mesh.h"
 #include "../core/MetricReport.h"
+#include "../core/ToothSegmentation.h"
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <memory>
 #include <vector>
+#include <optional>
 
 namespace DentScanBatch {
 
@@ -74,12 +77,14 @@ public:
      * @param group Group configuration
      * @param files List of files to process (from FileDiscovery)
      * @param alignment Alignment parameters
+     * @param roiTemplate Optional ROI template with tooth segmentation
      * @return Processing result
      */
     GroupResult process(
         const GroupConfig& group,
         const std::vector<DiscoveredFile>& files,
-        const AlignmentConfig& alignment);
+        const AlignmentConfig& alignment,
+        const std::optional<ROITemplate>& roiTemplate = std::nullopt);
 
     /**
      * Cancel processing (if running in async mode).
@@ -129,12 +134,14 @@ private:
                                 const std::vector<DiscoveredFile>& files,
                                 const ROIConfig& roi,
                                 const GroupConfig& group,
+                                const std::vector<std::vector<bool>>& toothMasks,
                                 GroupResult& result);
 
     void computePrecisionMetrics(const std::vector<std::shared_ptr<ScanData>>& scans,
                                  const std::vector<DiscoveredFile>& files,
                                  const ROIConfig& roi,
                                  const GroupConfig& group,
+                                 const std::vector<std::vector<bool>>& toothMasks,
                                  GroupResult& result);
 
     // Helper functions
@@ -142,6 +149,11 @@ private:
     std::vector<bool> computeROIMask(const ScanData& scan,
                                      const ROIConfig& roi,
                                      double z_occlusal) const;
+
+    // Compute tooth masks for all scans using template seeds
+    std::vector<std::vector<bool>> computeToothMasks(
+        const std::vector<std::shared_ptr<ScanData>>& scans,
+        const ROITemplate& roiTemplate) const;
 
     bool m_cancelled = false;
     int m_currentStep = 0;

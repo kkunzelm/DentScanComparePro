@@ -36,6 +36,8 @@ find_package(VTK 9.3 REQUIRED COMPONENTS
     GUISupportQt
     InteractionStyle
     IOImage
+    FiltersSources
+    FiltersModeling
 )
 
 # Find CGAL and Eigen

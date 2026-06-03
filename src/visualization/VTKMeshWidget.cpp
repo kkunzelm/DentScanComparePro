@@ -19,6 +19,8 @@
 #include <vtkCellPicker.h>
 #include <vtkSphereSource.h>
 #include <vtkDiskSource.h>
+#include <vtkCubeSource.h>
+#include <vtkOutlineFilter.h>
 #include <vtkTransform.h>
 #include <vtkTransformPolyDataFilter.h>
 #include <vtkMath.h>
@@ -514,4 +516,48 @@ void VTKMeshWidget::showToothSegmentation(const std::shared_ptr<ScanData>& scan,
         QString(" – %1 tooth vertices").arg(nTooth));
 
     m_renderWindow->Render();
+}
+
+// ── Bounding box wireframe ─────────────────────────────────────────────────────
+
+void VTKMeshWidget::showBoundingBox(const std::array<double, 3>& minPt,
+                                     const std::array<double, 3>& maxPt)
+{
+    // Remove existing bbox actor if any
+    if (m_bboxActor) {
+        m_renderer->RemoveActor(m_bboxActor);
+        m_bboxActor = nullptr;
+    }
+
+    // Create a cube that spans the bounding box
+    auto cube = vtkSmartPointer<vtkCubeSource>::New();
+    cube->SetBounds(minPt[0], maxPt[0],
+                    minPt[1], maxPt[1],
+                    minPt[2], maxPt[2]);
+    cube->Update();
+
+    // Extract edges as wireframe
+    auto outline = vtkSmartPointer<vtkOutlineFilter>::New();
+    outline->SetInputConnection(cube->GetOutputPort());
+
+    auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper->SetInputConnection(outline->GetOutputPort());
+
+    m_bboxActor = vtkSmartPointer<vtkActor>::New();
+    m_bboxActor->SetMapper(mapper);
+    m_bboxActor->GetProperty()->SetColor(1.0, 0.5, 0.0);  // orange
+    m_bboxActor->GetProperty()->SetLineWidth(2.0);
+    m_bboxActor->GetProperty()->LightingOff();
+
+    m_renderer->AddActor(m_bboxActor);
+    m_renderWindow->Render();
+}
+
+void VTKMeshWidget::hideBoundingBox()
+{
+    if (m_bboxActor) {
+        m_renderer->RemoveActor(m_bboxActor);
+        m_bboxActor = nullptr;
+        m_renderWindow->Render();
+    }
 }

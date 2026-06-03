@@ -13,8 +13,8 @@
 
 #include "batch/BatchRunner.h"
 #include "config/StudyConfig.h"
-// TODO: Uncomment as implementations are added
-// #include "gui/MainWindow.h"
+#include "config/ROIConfig.h"
+#include "gui/MainWindow.h"
 
 int main(int argc, char *argv[])
 {
@@ -79,6 +79,14 @@ int main(int argc, char *argv[])
     );
     parser.addOption(verboseOption);
 
+    // ROI template file
+    QCommandLineOption roiTemplateOption(
+        QStringList() << "r" << "roi-template",
+        "Path to ROI template JSON file with tooth segmentation settings.",
+        "file"
+    );
+    parser.addOption(roiTemplateOption);
+
     parser.process(app);
 
     // Determine mode
@@ -102,11 +110,15 @@ int main(int argc, char *argv[])
         QString studyPath = parser.value(studyOption);
         QString dataRoot = parser.value(dataRootOption);
         QString outputDir = parser.value(outputOption);
+        QString roiTemplatePath = parser.value(roiTemplateOption);
         bool verbose = parser.isSet(verboseOption);
 
         std::cout << "Study file:  " << studyPath.toStdString() << "\n";
         std::cout << "Data root:   " << dataRoot.toStdString() << "\n";
         std::cout << "Output dir:  " << outputDir.toStdString() << "\n";
+        if (!roiTemplatePath.isEmpty()) {
+            std::cout << "ROI template: " << roiTemplatePath.toStdString() << "\n";
+        }
         std::cout << "\n" << std::flush;
 
         try {
@@ -115,10 +127,23 @@ int main(int argc, char *argv[])
             std::cout << " done.\n";
             std::cout << "Study: " << config.name.toStdString() << "\n\n" << std::flush;
 
+            // Load ROI template if provided
+            std::optional<DentScanBatch::ROITemplate> roiTemplate;
+            if (!roiTemplatePath.isEmpty()) {
+                std::cout << "Loading ROI template..." << std::flush;
+                roiTemplate = DentScanBatch::ROITemplate::loadFromFile(roiTemplatePath);
+                std::cout << " done.\n";
+                if (roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+                    std::cout << "  Tooth segmentation enabled with "
+                              << roiTemplate->toothSeeds.size() << " seed points.\n";
+                }
+                std::cout << std::flush;
+            }
+
             DentScanBatch::BatchRunner runner;
             runner.setVerbose(verbose);
 
-            bool success = runner.run(config, dataRoot, outputDir);
+            bool success = runner.run(config, dataRoot, outputDir, roiTemplate);
             return success ? 0 : 1;
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
@@ -127,15 +152,8 @@ int main(int argc, char *argv[])
 
     } else {
         // === GUI MODE ===
-        std::cout << "DentScanComparePro v1.0 - GUI Mode\n";
-        std::cout << "Launching interactive interface...\n";
-
-        // TODO: Implement GUI
-        // MainWindow window;
-        // window.show();
-        // return app.exec();
-
-        std::cout << "[NOT YET IMPLEMENTED] GUI would launch here.\n";
-        return 0;
+        MainWindow window;
+        window.show();
+        return app.exec();
     }
 }

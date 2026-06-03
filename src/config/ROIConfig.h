@@ -1,6 +1,7 @@
 #ifndef ROICONFIG_H
 #define ROICONFIG_H
 
+#include <QString>
 #include <array>
 #include <vector>
 
@@ -131,6 +132,36 @@ struct OcclusalPlane {
     double signedDistance(const std::array<double, 3>& pt) const {
         return signedDistance(pt[0], pt[1], pt[2]);
     }
+};
+
+/**
+ * Complete ROI template including tooth segmentation settings.
+ * Can be saved/loaded from JSON for batch processing.
+ */
+struct ROITemplate {
+    ROIConfig roi;
+
+    // Tooth segmentation settings
+    bool useToothMask = false;
+    std::vector<std::array<double, 3>> toothSeeds;
+    double segMaxGeodesicMm = 12.0;
+    double segMaxCreaseAngleDeg = 50.0;
+    double segMinMeanCurvature = -4.0;
+    double segCurvatureRepulsion = 0.1;
+
+    /**
+     * Load ROI template from JSON file.
+     * @param filePath Path to JSON file
+     * @return Loaded template (throws on error)
+     */
+    static ROITemplate loadFromFile(const QString& filePath);
+
+    /**
+     * Save ROI template to JSON file.
+     * @param filePath Path to JSON file
+     * @return True if successful
+     */
+    bool saveToFile(const QString& filePath) const;
 };
 
 } // namespace DentScanBatch

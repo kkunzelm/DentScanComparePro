@@ -3,6 +3,7 @@
 #include "../core/CurvatureAnalysis.h"
 #include "../core/GPAReference.h"
 #include "../core/DistanceField.h"
+#include "../core/ToothSegmentation.h"
 #include <QFileInfo>
 #include <algorithm>
 #include <cmath>
@@ -24,14 +25,15 @@ void GroupProcessor::cancel() {
 GroupResult GroupProcessor::process(
     const GroupConfig& group,
     const std::vector<DiscoveredFile>& files,
-    const AlignmentConfig& alignment)
+    const AlignmentConfig& alignment,
+    const std::optional<ROITemplate>& roiTemplate)
 {
     GroupResult result;
     result.groupId = group.id;
     result.skd_mm = group.skd_mm;
     m_cancelled = false;
     m_currentStep = 0;
-    m_totalSteps = 6;  // Load, Curvature, GPA, Distance, Trueness, Precision
+    m_totalSteps = roiTemplate.has_value() && roiTemplate->useToothMask ? 7 : 6;
 
     if (files.empty()) {
         result.errors.append("No files to process");
@@ -46,7 +48,7 @@ GroupResult GroupProcessor::process(
 
     if (m_cancelled) return result;
 
-    // Stage 2: Compute curvature (needed for occlusal plane detection)
+    // Stage 2: Compute curvature (needed for occlusal plane detection and tooth segmentation)
     if (!computeCurvature(scans, result)) {
         return result;
     }
@@ -69,15 +71,29 @@ GroupResult GroupProcessor::process(
 
     if (m_cancelled) return result;
 
+    // Stage 4.5 (optional): Compute tooth masks using template seeds
+    std::vector<std::vector<bool>> toothMasks;
+    if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+        emit progressUpdated(++m_currentStep, m_totalSteps, "Computing tooth segmentation");
+        std::cout << "    Computing tooth segmentation..." << std::flush;
+        toothMasks = computeToothMasks(scans, *roiTemplate);
+        std::cout << " done (" << toothMasks.size() << " masks)\n" << std::flush;
+    }
+
+    if (m_cancelled) return result;
+
+    // Use ROI from template if provided, otherwise from group config
+    const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
+
     // Stage 5: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
-    computeTruenessMetrics(scans, files, group.roi, group, result);
+    computeTruenessMetrics(scans, files, effectiveROI, group, toothMasks, result);
 
     if (m_cancelled) return result;
 
     // Stage 6: Compute precision metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
-    computePrecisionMetrics(scans, files, group.roi, group, result);
+    computePrecisionMetrics(scans, files, effectiveROI, group, toothMasks, result);
 
     result.success = true;
     return result;
@@ -274,6 +290,7 @@ void GroupProcessor::computeTruenessMetrics(
     const std::vector<DiscoveredFile>& files,
     const ROIConfig& roi,
     const GroupConfig& group,
+    const std::vector<std::vector<bool>>& toothMasks,
     GroupResult& result)
 {
     std::cout << "    Computing trueness metrics..." << std::flush;
@@ -284,7 +301,8 @@ void GroupProcessor::computeTruenessMetrics(
         fileMap[f.path.toStdString()] = &f;
     }
 
-    for (const auto& scan : scans) {
+    for (std::size_t scanIdx = 0; scanIdx < scans.size(); scanIdx++) {
+        const auto& scan = scans[scanIdx];
         if (!scan->distanceComputed || scan->distanceToRef.empty()) {
             continue;
         }
@@ -308,6 +326,14 @@ void GroupProcessor::computeTruenessMetrics(
 
         // Apply ROI mask
         auto mask = computeROIMask(*scan, roi, z_occlusal);
+
+        // Apply tooth mask if available
+        if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
+            const auto& toothMask = toothMasks[scanIdx];
+            for (std::size_t i = 0; i < mask.size() && i < toothMask.size(); i++) {
+                mask[i] = mask[i] && toothMask[i];
+            }
+        }
 
         // Collect distances for vertices in ROI
         std::vector<double> distances;
@@ -391,9 +417,16 @@ void GroupProcessor::computePrecisionMetrics(
     const std::vector<DiscoveredFile>& files,
     const ROIConfig& roi,
     const GroupConfig& group,
+    const std::vector<std::vector<bool>>& toothMasks,
     GroupResult& result)
 {
     std::cout << "    Computing precision metrics..." << std::flush;
+
+    // Build index map from scan pointer to index (for tooth mask lookup)
+    std::map<const ScanData*, std::size_t> scanToIndex;
+    for (std::size_t i = 0; i < scans.size(); i++) {
+        scanToIndex[scans[i].get()] = i;
+    }
 
     // Group scans by scanner
     std::map<std::string, std::vector<std::shared_ptr<ScanData>>> scansByScanner;
@@ -432,8 +465,20 @@ void GroupProcessor::computePrecisionMetrics(
                 // Get occlusal Z for ROI
                 double z_occlusal = computeOcclusalZ(scan1->mesh);
 
-                // Apply ROI mask and compute RMS
+                // Apply ROI mask
                 auto mask = computeROIMask(*scan1, roi, z_occlusal);
+
+                // Apply tooth mask if available (use scan1's mask for the pair)
+                auto it = scanToIndex.find(scan1.get());
+                if (it != scanToIndex.end()) {
+                    std::size_t scanIdx = it->second;
+                    if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
+                        const auto& toothMask = toothMasks[scanIdx];
+                        for (std::size_t k = 0; k < mask.size() && k < toothMask.size(); k++) {
+                            mask[k] = mask[k] && toothMask[k];
+                        }
+                    }
+                }
 
                 double sq_sum = 0.0;
                 std::size_t count = 0;
@@ -474,6 +519,41 @@ void GroupProcessor::computePrecisionMetrics(
     }
 
     std::cout << " done (" << result.precisionReports.size() << " scanner groups)\n" << std::flush;
+}
+
+std::vector<std::vector<bool>> GroupProcessor::computeToothMasks(
+    const std::vector<std::shared_ptr<ScanData>>& scans,
+    const ROITemplate& roiTemplate) const
+{
+    std::vector<std::vector<bool>> masks;
+    masks.reserve(scans.size());
+
+    // Set up segmentation parameters from template
+    ToothSegmentation::Params params;
+    params.maxGeodesicMm = roiTemplate.segMaxGeodesicMm;
+    params.maxCreaseAngleDeg = roiTemplate.segMaxCreaseAngleDeg;
+    params.minMeanCurvature = roiTemplate.segMinMeanCurvature;
+    params.curvatureRepulsion = roiTemplate.segCurvatureRepulsion;
+
+    for (const auto& scan : scans) {
+        if (roiTemplate.toothSeeds.empty()) {
+            // No seeds, return empty mask (all false)
+            masks.push_back(std::vector<bool>(scan->mesh.number_of_vertices(), false));
+            continue;
+        }
+
+        // Run tooth segmentation using the curvature-weighted Dijkstra algorithm
+        // segmentFromPoints handles snapping seed points to nearest mesh vertices
+        std::vector<bool> mask = ToothSegmentation::segmentFromPoints(
+            *scan,
+            roiTemplate.toothSeeds,
+            params
+        );
+
+        masks.push_back(std::move(mask));
+    }
+
+    return masks;
 }
 
 } // namespace DentScanBatch
