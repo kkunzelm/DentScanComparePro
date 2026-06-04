@@ -169,6 +169,7 @@ bool BatchRunner::run(
     int skippedGroups = 0;
 
     GroupProcessor processor;
+    processor.setCancelFlag(&m_cancelled);  // Share cancellation flag with processor
     connect(&processor, &GroupProcessor::progressUpdated,
             this, [this](int current, int total, const QString& status) {
         if (m_verbose) {

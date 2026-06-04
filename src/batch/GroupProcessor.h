@@ -15,6 +15,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <atomic>
 
 namespace DentScanBatch {
 
@@ -97,6 +98,12 @@ public:
         const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {});
 
     /**
+     * Set external cancellation flag to check during processing.
+     * @param cancelFlag Pointer to atomic bool that can be set externally
+     */
+    void setCancelFlag(std::atomic<bool>* cancelFlag) { m_externalCancelFlag = cancelFlag; }
+
+    /**
      * Cancel processing (if running in async mode).
      */
     void cancel();
@@ -104,7 +111,7 @@ public:
     /**
      * Check if processing was cancelled.
      */
-    bool wasCancelled() const { return m_cancelled; }
+    bool wasCancelled() const { return m_cancelled || (m_externalCancelFlag && m_externalCancelFlag->load()); }
 
 signals:
     /**
@@ -174,6 +181,7 @@ private:
         const std::vector<std::vector<bool>>& toothMasks);
 
     bool m_cancelled = false;
+    std::atomic<bool>* m_externalCancelFlag = nullptr;
     int m_currentStep = 0;
     int m_totalSteps = 0;
 };

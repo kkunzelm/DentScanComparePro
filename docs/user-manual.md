@@ -82,12 +82,12 @@ The ROI template defines which region of the scan to analyze. This is especially
 **In GUI Mode:**
 
 1. Go to the **ROI Template Editor** tab
-2. Click **Load Template Scan** and select a representative STL file
+2. Enter a path or click **Browse...** then **Load** to load a representative STL file
 3. Configure the region of interest:
    - **Bounding Box**: Limit analysis to a rectangular region
-   - **Z-Plane Slab**: Focus on occlusal region (above/below occlusal plane)
+   - **Plane Slab (ROI Height)**: Define a slab with **Offset A** and **Offset B** distances from a picked plane
    - **Tooth Segmentation**: Place seed points on tooth cusps, then run segmentation
-4. Click **Save Template** to save as JSON
+4. Click **Save Template...** in the ROI Template I/O section to save as JSON
 
 **Tooth Segmentation Workflow:**
 
@@ -110,9 +110,11 @@ The ROI template defines which region of the scan to analyze. This is especially
    - **Data Root**: Directory containing scanner folders
    - **Output Dir**: Where to save results
    - **External Ref** (optional): CAD or lab scanner reference STL
-3. Click **Load Configuration** to verify
-4. Go to **Batch Processing** tab
-5. Click **Run Batch Processing**
+   - **ROI Template** (optional): JSON file from ROI Template Editor (enables masked ICP and ROI-based metrics)
+3. Check **Scans are pre-aligned** if using DentScanAlign output
+4. Click **Load Configuration** to verify
+5. Go to **Batch Processing** tab
+6. Click **Run Batch Processing**
 
 **CLI Mode:**
 ```bash
@@ -149,7 +151,7 @@ The ROI template defines which region of the scan to analyze. This is especially
 
 | Directory | Contents |
 |-----------|----------|
-| `qc/gpa_means/` | GPA reference meshes (one STL per SKD group) |
+| `qc/reference_meshes/` | Reference meshes (GPA mean or external reference, one STL per SKD group) |
 | `qc/transforms/` | Transform matrices + metrics (JSON per scan) |
 | `qc/segmented/` | Tooth-only meshes (when tooth mask used) |
 | `qc/difference_images/` | Color-coded distance maps (PNG) |
@@ -306,6 +308,10 @@ Progress is tracked in `.batch_progress.json` in the output directory.
 ## Support
 
 For issues and feature requests, contact:
-Prof. Dr. Karl-Heinz Kunzelmann
+
+**Prof. Dr. Karl-Heinz Kunzelmann**
+Website: [www.kunzelmann.de](https://www.kunzelmann.de)
+
+---
 
 DentScanComparePro v1.0

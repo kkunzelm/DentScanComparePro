@@ -41,7 +41,7 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("DentScanComparePro - Scanner Accuracy Evaluation");
+    setWindowTitle("DentScanComparePro - Scanner Accuracy Evaluation (Prof. K.-H. Kunzelmann)");
     setMinimumSize(1200, 800);
 
     setupUI();
@@ -70,6 +70,7 @@ void MainWindow::loadSettings()
     QSignalBlocker b4(m_templatePathEdit);
     QSignalBlocker b5(m_externalRefEdit);
     QSignalBlocker b6(m_scansPreAlignedChk);
+    QSignalBlocker b7(m_roiTemplateEdit);
 
     m_studyPathEdit->setText(settings.value("paths/studyFile").toString());
     m_dataRootEdit->setText(settings.value("paths/dataRoot").toString());
@@ -80,6 +81,7 @@ void MainWindow::loadSettings()
     }
 
     m_externalRefEdit->setText(settings.value("paths/externalRef").toString());
+    m_roiTemplateEdit->setText(settings.value("paths/roiTemplate").toString());
     m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
 
     m_templatePathEdit->setText(settings.value("paths/templateScan").toString());
@@ -92,6 +94,7 @@ void MainWindow::saveSettings()
     settings.setValue("paths/dataRoot", m_dataRootEdit->text());
     settings.setValue("paths/outputDir", m_outputDirEdit->text());
     settings.setValue("paths/externalRef", m_externalRefEdit->text());
+    settings.setValue("paths/roiTemplate", m_roiTemplateEdit->text());
     settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
     settings.setValue("paths/templateScan", m_templatePathEdit->text());
 }
@@ -140,11 +143,17 @@ void MainWindow::setupMenuBar()
 
     auto* aboutAction = new QAction("&About DentScanComparePro", this);
     connect(aboutAction, &QAction::triggered, this, [this]() {
-        QMessageBox::about(this, "About DentScanComparePro",
-            "DentScanComparePro v1.0\n\n"
-            "Automated batch evaluation of dental intraoral scanner accuracy.\n"
-            "Computes ISO 5725/12836-compliant trueness and precision metrics.\n\n"
-            "Prof. Dr. Karl-Heinz Kunzelmann");
+        QMessageBox aboutBox(this);
+        aboutBox.setWindowTitle("About DentScanComparePro");
+        aboutBox.setTextFormat(Qt::RichText);
+        aboutBox.setText(
+            "<h3>DentScanComparePro v1.0</h3>"
+            "<p>Automated batch evaluation of dental intraoral scanner accuracy.<br>"
+            "Computes ISO 5725/12836-compliant trueness and precision metrics.</p>"
+            "<p><b>Prof. Dr. Karl-Heinz Kunzelmann</b><br>"
+            "<a href=\"https://www.kunzelmann.de\">www.kunzelmann.de</a></p>");
+        aboutBox.setTextInteractionFlags(Qt::TextBrowserInteraction);
+        aboutBox.exec();
     });
     helpMenu->addAction(aboutAction);
 }
@@ -204,6 +213,17 @@ void MainWindow::setupConfigTab()
     refRow->addWidget(browseRefBtn);
     pathsLayout->addRow("External Ref:", refRow);
 
+    // ROI template (optional)
+    auto* roiRow = new QHBoxLayout();
+    m_roiTemplateEdit = new QLineEdit();
+    m_roiTemplateEdit->setPlaceholderText("Optional: ROI template JSON (from ROI Template Editor)");
+    auto* browseROIBtn = new QPushButton("Browse...");
+    connect(browseROIBtn, &QPushButton::clicked, this, &MainWindow::browseROITemplate);
+    connect(m_roiTemplateEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
+    roiRow->addWidget(m_roiTemplateEdit, 1);
+    roiRow->addWidget(browseROIBtn);
+    pathsLayout->addRow("ROI Template:", roiRow);
+
     // Pre-aligned checkbox
     m_scansPreAlignedChk = new QCheckBox("Scans are pre-aligned (from DentScanAlign)");
     m_scansPreAlignedChk->setToolTip("Check this if scans were coarsely aligned via landmark registration.\n"
@@ -259,12 +279,17 @@ void MainWindow::setupROITab()
     // Template scan loading
     auto* loadRow = new QHBoxLayout();
     m_templatePathEdit = new QLineEdit();
-    m_templatePathEdit->setReadOnly(true);
-    m_templatePathEdit->setPlaceholderText("Load a template scan for ROI editing");
-    auto* loadTemplateBtn = new QPushButton("Load Template Scan...");
-    connect(loadTemplateBtn, &QPushButton::clicked, this, &MainWindow::loadTemplateScan);
+    m_templatePathEdit->setPlaceholderText("Path to template STL (or use Browse)");
+    auto* loadTemplateBtn = new QPushButton("Browse...");
+    connect(loadTemplateBtn, &QPushButton::clicked, this, &MainWindow::browseTemplateScan);
+    connect(m_templatePathEdit, &QLineEdit::returnPressed, this, &MainWindow::loadTemplateScan);
+    connect(m_templatePathEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
     loadRow->addWidget(m_templatePathEdit, 1);
     loadRow->addWidget(loadTemplateBtn);
+
+    auto* loadScanBtn = new QPushButton("Load");
+    connect(loadScanBtn, &QPushButton::clicked, this, &MainWindow::loadTemplateScan);
+    loadRow->addWidget(loadScanBtn);
     leftLayout->addLayout(loadRow);
 
     // VTK mesh widget
@@ -335,7 +360,7 @@ void MainWindow::setupROITab()
     rightLayout->addWidget(bboxGroup);
 
     // Z-Plane Slab group
-    auto* zPlaneGroup = new QGroupBox("Z-Plane Slab (Occlusal Region)");
+    auto* zPlaneGroup = new QGroupBox("Plane Slab (ROI Height)");
     auto* zPlaneLayout = new QVBoxLayout(zPlaneGroup);
 
     m_zPlaneActiveChk = new QCheckBox("Active");
@@ -366,14 +391,14 @@ void MainWindow::setupROITab()
     m_zAboveSpin->setValue(2.0);
     m_zAboveSpin->setDecimals(1);
     m_zAboveSpin->setSuffix(" mm");
-    zPlaneParamsLayout->addRow("Above Occlusal:", m_zAboveSpin);
+    zPlaneParamsLayout->addRow("Offset A:", m_zAboveSpin);
 
     m_zBelowSpin = new QDoubleSpinBox();
     m_zBelowSpin->setRange(0, 50);
     m_zBelowSpin->setValue(12.0);
     m_zBelowSpin->setDecimals(1);
     m_zBelowSpin->setSuffix(" mm");
-    zPlaneParamsLayout->addRow("Below Occlusal:", m_zBelowSpin);
+    zPlaneParamsLayout->addRow("Offset B:", m_zBelowSpin);
     zPlaneLayout->addLayout(zPlaneParamsLayout);
 
     connect(m_zPlaneActiveChk, &QCheckBox::toggled, this, &MainWindow::onZPlaneChanged);
@@ -693,6 +718,18 @@ void MainWindow::browseExternalRef()
     }
 }
 
+void MainWindow::browseROITemplate()
+{
+    QString path = QFileDialog::getOpenFileName(this,
+        "Select ROI Template",
+        QString(),
+        "JSON Files (*.json);;All Files (*)");
+
+    if (!path.isEmpty()) {
+        m_roiTemplateEdit->setText(path);
+    }
+}
+
 void MainWindow::loadStudyConfig()
 {
     QString studyPath = m_studyPathEdit->text();
@@ -748,14 +785,26 @@ void MainWindow::updateStudyOverview()
     m_studyTree->resizeColumnToContents(0);
 }
 
-void MainWindow::loadTemplateScan()
+void MainWindow::browseTemplateScan()
 {
     QString path = QFileDialog::getOpenFileName(this,
         "Select Template STL File",
-        QString(),
+        m_templatePathEdit->text(),
         "STL Files (*.stl);;All Files (*)");
 
-    if (path.isEmpty()) return;
+    if (!path.isEmpty()) {
+        m_templatePathEdit->setText(path);
+        loadTemplateScan();
+    }
+}
+
+void MainWindow::loadTemplateScan()
+{
+    QString path = m_templatePathEdit->text().trimmed();
+    if (path.isEmpty()) {
+        QMessageBox::warning(this, "No Path", "Please enter or browse for a template STL file.");
+        return;
+    }
 
     std::string errorMsg;
     m_templateScan = STLReader::read(path.toStdString(), errorMsg);
@@ -765,8 +814,6 @@ void MainWindow::loadTemplateScan()
             QString("Failed to load STL file:\n%1").arg(QString::fromStdString(errorMsg)));
         return;
     }
-
-    m_templatePathEdit->setText(path);
     m_roiMeshWidget->setMesh(m_templateScan);
     m_roiMeshWidget->resetCamera();
 
@@ -1173,6 +1220,7 @@ void MainWindow::runBatch()
 
     // Get external reference settings from GUI
     QString externalRef = m_externalRefEdit->text();
+    QString roiTemplatePath = m_roiTemplateEdit->text();
     bool scansPreAligned = m_scansPreAlignedChk->isChecked();
 
     m_batchLog->clear();
@@ -1181,6 +1229,9 @@ void MainWindow::runBatch()
     m_batchLog->append("Output dir: " + outputDir);
     if (!externalRef.isEmpty()) {
         m_batchLog->append("External reference: " + externalRef);
+    }
+    if (!roiTemplatePath.isEmpty()) {
+        m_batchLog->append("ROI template: " + roiTemplatePath);
     }
     if (scansPreAligned) {
         m_batchLog->append("Scans pre-aligned: YES (skipping GPA, ICP refinement will run)");
@@ -1197,6 +1248,19 @@ void MainWindow::runBatch()
     enableBatchControls(false);
     m_batchRunning = true;
 
+    // Load ROI template if specified
+    std::optional<DentScanBatch::ROITemplate> roiTemplate;
+    if (!roiTemplatePath.isEmpty()) {
+        try {
+            roiTemplate = DentScanBatch::ROITemplate::loadFromFile(roiTemplatePath);
+            m_batchLog->append("ROI template loaded successfully");
+        } catch (const std::exception& e) {
+            QMessageBox::warning(this, "ROI Template Error",
+                QString("Failed to load ROI template:\n%1\n\nContinuing without ROI template.")
+                .arg(e.what()));
+        }
+    }
+
     // Create batch runner
     m_batchRunner = std::make_unique<DentScanBatch::BatchRunner>();
     m_batchRunner->setVerbose(true);
@@ -1205,8 +1269,8 @@ void MainWindow::runBatch()
     m_batchWatcher = new QFutureWatcher<bool>(this);
     connect(m_batchWatcher, &QFutureWatcher<bool>::finished, this, &MainWindow::onBatchFinished);
 
-    auto future = QtConcurrent::run([this, dataRoot, outputDir]() {
-        return m_batchRunner->run(m_studyConfig, dataRoot, outputDir);
+    auto future = QtConcurrent::run([this, dataRoot, outputDir, roiTemplate]() {
+        return m_batchRunner->run(m_studyConfig, dataRoot, outputDir, roiTemplate);
     });
 
     m_batchWatcher->setFuture(future);
@@ -1552,7 +1616,7 @@ void MainWindow::onQCViewRequested(const QString& scanId, const QString& imagePa
     }
 
     // Find GPA mean for this group
-    QString gpaMeanPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+    QString gpaMeanPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
     if (!QFile::exists(gpaMeanPath)) {
         QMessageBox::warning(this, "Error",
             QString("GPA mean not found: %1").arg(gpaMeanPath));
@@ -1609,7 +1673,7 @@ void MainWindow::onQCReregisterRequested(const QString& scanId)
     }
 
     // Find GPA mean for this group
-    QString gpaMeanPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+    QString gpaMeanPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
 
     // Open errand resolution dialog
     qDebug() << "Creating ErrandResolutionDialog...";
@@ -1672,7 +1736,7 @@ void MainWindow::generateDifferenceImages()
         return;
     }
 
-    QDir gpaMeansDir(outputDir + "/qc/gpa_means");
+    QDir gpaMeansDir(outputDir + "/qc/reference_meshes");
     if (!gpaMeansDir.exists()) {
         QMessageBox::warning(this, "No GPA Means",
             "No GPA mean meshes found. Run batch processing first.");
@@ -1759,7 +1823,7 @@ void MainWindow::generateDifferenceImages()
         }
 
         // Load GPA mean (cached)
-        QString gpaMeanPath = gpaMeansDir.absoluteFilePath(groupId + "_gpa_mean.stl");
+        QString gpaMeanPath = gpaMeansDir.absoluteFilePath(groupId + "_reference.stl");
         std::shared_ptr<ScanData> gpaMean;
 
         auto cacheIt = gpaMeanCache.find(groupId);

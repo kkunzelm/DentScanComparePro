@@ -47,9 +47,11 @@ private slots:
     void browseDataRoot();
     void browseOutputDir();
     void browseExternalRef();
+    void browseROITemplate();
     void loadStudyConfig();
 
     // ROI Template Editor
+    void browseTemplateScan();
     void loadTemplateScan();
     void onBBoxChanged();
     void onZPlaneChanged();
@@ -148,6 +150,7 @@ private:
     QLineEdit* m_dataRootEdit = nullptr;
     QLineEdit* m_outputDirEdit = nullptr;
     QLineEdit* m_externalRefEdit = nullptr;
+    QLineEdit* m_roiTemplateEdit = nullptr;
     class QCheckBox* m_scansPreAlignedChk = nullptr;
     QTreeWidget* m_studyTree = nullptr;
     QLabel* m_studyNameLabel = nullptr;

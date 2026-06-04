@@ -62,14 +62,14 @@ GroupResult GroupProcessor::process(
         return result;
     }
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 2: Compute curvature (needed for occlusal plane detection and tooth segmentation)
     if (!computeCurvature(scans, result)) {
         return result;
     }
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 2.5: Apply precomputed transforms from DentScanAlign (if provided)
     if (!precomputedTransforms.empty()) {
@@ -90,7 +90,7 @@ GroupResult GroupProcessor::process(
         std::cout << " done (" << applied << "/" << scans.size() << " transforms applied)\n" << std::flush;
     }
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 3 (MOVED EARLIER): Compute tooth masks BEFORE alignment
     // This allows masked ICP to focus on tooth surfaces
@@ -102,7 +102,7 @@ GroupResult GroupProcessor::process(
         std::cout << " done (" << toothMasks.size() << " masks)\n" << std::flush;
     }
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 4: Get reference mesh (either external or GPA-computed)
     std::shared_ptr<SurfaceMesh> referenceMesh;
@@ -152,7 +152,7 @@ GroupResult GroupProcessor::process(
 
         for (std::size_t i = 0; i < scans.size(); ++i) {
             auto& scan = scans[i];
-            if (m_cancelled) return result;
+            if (wasCancelled()) return result;
             std::cout << "." << std::flush;
 
             ICPRegistration::Result icpResult;
@@ -181,14 +181,14 @@ GroupResult GroupProcessor::process(
     }
     result.gpaMean = referenceMesh;
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 5: Compute distances to reference
     if (!computeDistances(scans, referenceMesh, result)) {
         return result;
     }
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Use ROI from template if provided, otherwise from group config
     const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
@@ -197,13 +197,13 @@ GroupResult GroupProcessor::process(
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
     computeTruenessMetrics(scans, files, effectiveROI, group, toothMasks, result);
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 7: Compute precision metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
     computePrecisionMetrics(scans, files, effectiveROI, group, toothMasks, result);
 
-    if (m_cancelled) return result;
+    if (wasCancelled()) return result;
 
     // Stage 8 (optional): Export QC data
     if (!outputDir.isEmpty()) {
@@ -225,7 +225,7 @@ bool GroupProcessor::loadScans(
     scans.reserve(files.size());
 
     for (const auto& file : files) {
-        if (m_cancelled) return false;
+        if (wasCancelled()) return false;
 
         std::string errorMsg;
         std::cout << "." << std::flush;
@@ -284,7 +284,7 @@ bool GroupProcessor::computeCurvature(
     std::cout << "    Computing curvature..." << std::flush;
 
     for (auto& scan : scans) {
-        if (m_cancelled) return false;
+        if (wasCancelled()) return false;
         std::cout << "." << std::flush;
         CurvatureAnalysis::compute(*scan);
     }
@@ -357,7 +357,7 @@ bool GroupProcessor::computeDistances(
     std::cout << "    Computing distances";
 
     for (auto& scan : scans) {
-        if (m_cancelled) return false;
+        if (wasCancelled()) return false;
 
         scan->distanceToRef.clear();
         refTree.computeDistances(*scan);

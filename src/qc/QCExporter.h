@@ -14,8 +14,8 @@ namespace DentScanBatch {
  *
  * Output structure:
  *   qc/
- *   ├── gpa_means/           - GPA reference meshes (one per SKD group)
- *   │   └── SKD_XX_gpa_mean.stl
+ *   ├── reference_meshes/    - Reference meshes (one per SKD group)
+ *   │   └── SKD_XX_reference.stl
  *   ├── difference_images/   - Color-coded distance maps (PNG)
  *   │   └── Scanner_SKDXX_rN.png
  *   └── transforms/          - Registration transforms (JSON)
@@ -24,13 +24,13 @@ namespace DentScanBatch {
 class QCExporter {
 public:
     /**
-     * Export a GPA mean mesh as STL file.
-     * @param mesh The GPA mean surface mesh
-     * @param outputDir Base output directory (qc/gpa_means/ will be appended)
+     * Export a reference mesh as STL file.
+     * @param mesh The reference surface mesh (GPA mean or external reference)
+     * @param outputDir Base output directory (qc/reference_meshes/ will be appended)
      * @param groupId Group identifier (e.g., "SKD_20")
      * @return True if successful
      */
-    static bool exportGPAMean(
+    static bool exportReferenceMesh(
         const std::shared_ptr<SurfaceMesh>& mesh,
         const QString& outputDir,
         const QString& groupId);

@@ -108,8 +108,8 @@ bool QCExporter::createQCDirectories(const QString& outputDir)
     }
 
     QDir qcDir(outputDir + "/qc");
-    if (!qcDir.exists("gpa_means")) {
-        if (!qcDir.mkdir("gpa_means")) return false;
+    if (!qcDir.exists("reference_meshes")) {
+        if (!qcDir.mkdir("reference_meshes")) return false;
     }
     if (!qcDir.exists("difference_images")) {
         if (!qcDir.mkdir("difference_images")) return false;
@@ -184,7 +184,7 @@ bool QCExporter::writeBinarySTL(const SurfaceMesh& mesh, const QString& filePath
     return out.good();
 }
 
-bool QCExporter::exportGPAMean(const std::shared_ptr<SurfaceMesh>& mesh,
+bool QCExporter::exportReferenceMesh(const std::shared_ptr<SurfaceMesh>& mesh,
                                 const QString& outputDir,
                                 const QString& groupId)
 {
@@ -192,8 +192,8 @@ bool QCExporter::exportGPAMean(const std::shared_ptr<SurfaceMesh>& mesh,
 
     createQCDirectories(outputDir);
 
-    QString filename = QString("%1_gpa_mean.stl").arg(groupId);
-    QString fullPath = outputDir + "/qc/gpa_means/" + filename;
+    QString filename = QString("%1_reference.stl").arg(groupId);
+    QString fullPath = outputDir + "/qc/reference_meshes/" + filename;
 
     return writeBinarySTL(*mesh, fullPath);
 }
@@ -522,7 +522,7 @@ QStringList QCExporter::exportGroupQC(const GroupResult& result,
 
     // Export GPA mean mesh
     if (result.gpaMean && !result.gpaMean->is_empty()) {
-        if (!exportGPAMean(result.gpaMean, outputDir, result.groupId)) {
+        if (!exportReferenceMesh(result.gpaMean, outputDir, result.groupId)) {
             errors << QString("Failed to export GPA mean for %1").arg(result.groupId);
         }
     }
