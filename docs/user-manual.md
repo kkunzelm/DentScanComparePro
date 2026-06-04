@@ -101,6 +101,23 @@ The ROI template defines which region of the scan to analyze. This is especially
 5. Check **Use tooth mask as ROI**
 6. Save the template
 
+**Brush Tool (Manual ROI Adjustment):**
+
+The brush tool allows manual override of the geometric ROI (BBox + Plane Slab):
+
+1. Click **Include** or **Exclude** button
+2. Set **Radius** (brush size in mm)
+3. Click on mesh to paint regions
+
+| Button | Effect | Visualization |
+|--------|--------|---------------|
+| Include | Force vertices INTO ROI | Bright green |
+| Exclude | Force vertices OUT of ROI | Near black |
+
+Brush zones override the geometric ROI decisions. Use this to:
+- Include a region that's outside the bounding box
+- Exclude artifacts or unwanted areas within the ROI
+
 ### Step 4: Run Batch Processing
 
 **GUI Mode:**

@@ -653,6 +653,106 @@ void VTKMeshWidget::showToothSegmentation(const std::shared_ptr<ScanData>& scan,
     m_renderWindow->Render();
 }
 
+// ── Brush zone visualization ────────────────────────────────────────────────────
+// Include zones = bright green, Exclude zones = near black
+
+void VTKMeshWidget::showBrushZones(const std::shared_ptr<ScanData>& scan,
+                                    const std::vector<DentScanBatch::BrushZone>& zones,
+                                    const std::vector<bool>& toothMask)
+{
+    if (!scan) return;
+
+    if (zones.empty()) {
+        // No brush zones - show tooth segmentation or plain shading
+        if (!toothMask.empty()) {
+            showToothSegmentation(scan, toothMask);
+        } else {
+            showPhongShading();
+        }
+        return;
+    }
+
+    clearOverlayActors();
+
+    // Rebuild the polydata with per-vertex RGB colours
+    auto pd = cgalToVTK(scan->mesh);
+
+    auto colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    colors->SetName("BrushZoneColor");
+    colors->SetNumberOfComponents(3);
+    colors->SetNumberOfTuples(
+        static_cast<vtkIdType>(scan->mesh.num_vertices()));
+
+    // Color scheme:
+    // - Base (no zone): tooth mask ivory (255,245,220) or light gray (180,180,180)
+    // - Include zone: bright green (100, 220, 100)
+    // - Exclude zone: near black (40, 40, 40)
+
+    for (auto v : scan->mesh.vertices()) {
+        vtkIdType idx = static_cast<vtkIdType>(v.idx());
+        const Point3& p = scan->mesh.point(v);
+
+        // Check if vertex is in any brush zone (later zones override earlier)
+        bool inIncludeZone = false;
+        bool inExcludeZone = false;
+
+        for (const auto& zone : zones) {
+            if (zone.contains(p.x(), p.y(), p.z())) {
+                if (zone.include) {
+                    inIncludeZone = true;
+                    inExcludeZone = false;
+                } else {
+                    inExcludeZone = true;
+                    inIncludeZone = false;
+                }
+            }
+        }
+
+        if (inIncludeZone) {
+            colors->SetTuple3(idx, 100, 220, 100);  // bright green
+        } else if (inExcludeZone) {
+            colors->SetTuple3(idx, 40, 40, 40);     // near black
+        } else {
+            // Base color: use tooth mask if available
+            bool isTooth = (!toothMask.empty() && v.idx() < toothMask.size() && toothMask[v.idx()]);
+            if (isTooth) {
+                colors->SetTuple3(idx, 255, 245, 220);  // ivory (tooth)
+            } else if (!toothMask.empty()) {
+                colors->SetTuple3(idx, 70, 70, 70);     // dark grey (gingiva)
+            } else {
+                colors->SetTuple3(idx, 180, 180, 180);  // light gray (no mask)
+            }
+        }
+    }
+
+    pd->GetPointData()->SetScalars(colors);
+
+    m_polyData->DeepCopy(pd);
+    m_mapper->SetInputData(m_polyData);
+    m_mapper->SetColorModeToDirectScalars();
+    m_mapper->ScalarVisibilityOn();
+    m_colorBar->VisibilityOff();
+
+    // Count vertices in each zone type
+    std::size_t nInclude = 0, nExclude = 0;
+    for (auto v : scan->mesh.vertices()) {
+        const Point3& p = scan->mesh.point(v);
+        for (const auto& zone : zones) {
+            if (zone.contains(p.x(), p.y(), p.z())) {
+                if (zone.include) nInclude++;
+                else nExclude++;
+                break;  // count each vertex once
+            }
+        }
+    }
+
+    m_titleLabel->setText(
+        QString::fromStdString(scan->scannerName) +
+        QString(" – Include: %1, Exclude: %2 vertices").arg(nInclude).arg(nExclude));
+
+    m_renderWindow->Render();
+}
+
 // ── Bounding box wireframe ─────────────────────────────────────────────────────
 
 void VTKMeshWidget::showBoundingBox(const std::array<double, 3>& minPt,

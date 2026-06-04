@@ -1240,8 +1240,18 @@ void MainWindow::updateROIVisualization()
         }
     }
 
-    // Display as segmentation (in ROI vs out of ROI)
-    m_roiMeshWidget->showToothSegmentation(m_templateScan, mask);
+    // Display visualization
+    if (!m_currentROI.brushZones.empty()) {
+        // Show brush zones with distinct colors (green=include, black=exclude)
+        std::vector<bool> toothMask;
+        if (m_useToothMaskChk && m_useToothMaskChk->isChecked() && !m_toothMask.empty()) {
+            toothMask = m_toothMask;
+        }
+        m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, toothMask);
+    } else {
+        // No brush zones - show combined ROI mask
+        m_roiMeshWidget->showToothSegmentation(m_templateScan, mask);
+    }
 
     // Show Z-plane visualization if active
     if (m_currentROI.zPlane.active) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Mesh.h"
+#include "../config/ROIConfig.h"
 #include <QWidget>
 #include <QLabel>
 #include <vtkSmartPointer.h>
@@ -89,6 +90,12 @@ public:
     // gingiva = dark grey.  Pass an empty mask to revert to plain shading.
     void showToothSegmentation(const std::shared_ptr<ScanData>& scan,
                                const std::vector<bool>& toothMask);
+
+    // Show brush zone effects on mesh: include zones = green, exclude = dark.
+    // Combines with existing visualization (segmentation or base color).
+    void showBrushZones(const std::shared_ptr<ScanData>& scan,
+                        const std::vector<DentScanBatch::BrushZone>& zones,
+                        const std::vector<bool>& toothMask = {});
 
     // Show a wireframe bounding box with the given min/max coordinates.
     void showBoundingBox(const std::array<double, 3>& minPt,

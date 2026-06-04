@@ -5,6 +5,11 @@ All notable changes to DentScanComparePro are documented in this file.
 ## [Unreleased] - 2025-06-04
 
 ### Added
+- **Brush zone visualization**: Brush tool now shows distinct colors on the mesh:
+  - Include zones: bright green
+  - Exclude zones: near black
+  - Title bar shows vertex counts for each zone type
+  - Previously only showed yellow spheres at click points
 - **ROI Template field in Study Configuration**: New "ROI Template" path field allows specifying a JSON template file for batch processing. The template is used for masked ICP alignment and ROI-based metric computation.
 - **Masked ICP Output directory**: New optional "Masked ICP Output" path field in Study Configuration. When masked ICP is enabled and this path is specified, results are saved to this separate directory instead of the main Output Dir.
 - **"Use ROI mask for registration" checkbox**: New checkbox in Batch Processing tab under "Registration Options" controls whether masked ICP is used:
