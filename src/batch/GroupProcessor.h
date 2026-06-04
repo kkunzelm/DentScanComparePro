@@ -10,8 +10,10 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <Eigen/Core>
 #include <memory>
 #include <vector>
+#include <map>
 #include <optional>
 
 namespace DentScanBatch {
@@ -78,13 +80,21 @@ public:
      * @param files List of files to process (from FileDiscovery)
      * @param alignment Alignment parameters
      * @param roiTemplate Optional ROI template with tooth segmentation
+     * @param outputDir Optional output directory for QC export (empty = no export)
+     * @param externalRefPath Optional path to external reference STL (empty = compute GPA)
+     * @param scansPreAligned If true, skip alignment (scans already aligned by DentScanAlign)
+     * @param precomputedTransforms Optional map of normalized filename -> transform from DentScanAlign
      * @return Processing result
      */
     GroupResult process(
         const GroupConfig& group,
         const std::vector<DiscoveredFile>& files,
         const AlignmentConfig& alignment,
-        const std::optional<ROITemplate>& roiTemplate = std::nullopt);
+        const std::optional<ROITemplate>& roiTemplate = std::nullopt,
+        const QString& outputDir = QString(),
+        const QString& externalRefPath = QString(),
+        bool scansPreAligned = false,
+        const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {});
 
     /**
      * Cancel processing (if running in async mode).
@@ -154,6 +164,14 @@ private:
     std::vector<std::vector<bool>> computeToothMasks(
         const std::vector<std::shared_ptr<ScanData>>& scans,
         const ROITemplate& roiTemplate) const;
+
+    // Export QC data (difference images, transforms, GPA mean)
+    void exportQCData(
+        const GroupResult& result,
+        const std::vector<std::shared_ptr<ScanData>>& scans,
+        const std::vector<DiscoveredFile>& files,
+        const QString& outputDir,
+        const std::vector<std::vector<bool>>& toothMasks);
 
     bool m_cancelled = false;
     int m_currentStep = 0;

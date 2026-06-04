@@ -140,6 +140,9 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.name = study["name"].toString();
     config.version = study["version"].toInt(1);
     config.referenceStrategy = study["reference_strategy"].toString("gpa_mean");
+    config.externalReferencePath = study["external_reference_path"].toString();
+    config.scansPreAligned = study["scans_pre_aligned"].toBool(false);
+    config.alignmentsDirectory = study["alignments_directory"].toString();
 
     // Alignment config
     auto align = study["alignment"].toObject();
@@ -230,6 +233,15 @@ void StudyConfig::saveToJSON(const QString& path) const {
     study["name"] = name;
     study["version"] = version;
     study["reference_strategy"] = referenceStrategy;
+    if (!externalReferencePath.isEmpty()) {
+        study["external_reference_path"] = externalReferencePath;
+    }
+    if (scansPreAligned) {
+        study["scans_pre_aligned"] = scansPreAligned;
+    }
+    if (!alignmentsDirectory.isEmpty()) {
+        study["alignments_directory"] = alignmentsDirectory;
+    }
 
     QJsonObject align;
     align["max_icp_iterations"] = alignment.maxIcpIterations;

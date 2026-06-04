@@ -26,12 +26,64 @@
 #include <vtkMath.h>
 #include <vtkUnsignedCharArray.h>
 
+#include <vtkWindowToImageFilter.h>
+#include <vtkPNGWriter.h>
+#include <vtkBillboardTextActor3D.h>
+#include <vtkAxesActor.h>
+#include <vtkOrientationMarkerWidget.h>
+#include <vtkCaptionActor2D.h>
+#include <vtkTextActor.h>
+
 #include <Eigen/Geometry>
 
 VTKMeshWidget::VTKMeshWidget(QWidget* parent)
     : QWidget(parent)
 {
     buildPipeline();
+}
+
+VTKMeshWidget::~VTKMeshWidget()
+{
+    // Remove event filter first to prevent any events during destruction
+    if (m_vtkWidget) {
+        m_vtkWidget->removeEventFilter(this);
+    }
+
+    // Clear extra actor vectors first
+    m_overlayActors.clear();
+    m_sphereActors.clear();
+    m_textActors.clear();
+    m_planeActors.clear();
+    m_bboxActor = nullptr;
+
+    // Remove all props from renderer while it's still valid
+    if (m_renderer) {
+        m_renderer->RemoveAllViewProps();
+    }
+
+    // Disable orientation widget before cleanup
+    if (m_orientationWidget) {
+        m_orientationWidget->SetEnabled(0);
+        m_orientationWidget = nullptr;
+    }
+
+    // Clear main VTK pipeline objects
+    m_colorBar = nullptr;
+    m_actor = nullptr;
+    m_mapper = nullptr;
+    m_polyData = nullptr;
+
+    // Finalize render window before clearing it (releases OpenGL resources)
+    if (m_renderWindow) {
+        m_renderWindow->Finalize();
+    }
+
+    // Clear renderer and window last
+    m_renderer = nullptr;
+    m_renderWindow = nullptr;
+
+    // Note: Don't call m_vtkWidget->setRenderWindow(nullptr) - let Qt handle
+    // the QVTKOpenGLNativeWidget cleanup naturally when this parent is destroyed.
 }
 
 void VTKMeshWidget::buildPipeline()
@@ -65,11 +117,19 @@ void VTKMeshWidget::buildPipeline()
 
     m_actor = vtkSmartPointer<vtkActor>::New();
     m_actor->SetMapper(m_mapper);
-    m_actor->GetProperty()->SetColor(0.85, 0.82, 0.78);
+    m_actor->GetProperty()->SetColor(0.85, 0.82, 0.78);  // front face: light beige
     m_actor->GetProperty()->SetAmbient(0.1);
     m_actor->GetProperty()->SetDiffuse(0.7);
     m_actor->GetProperty()->SetSpecular(0.3);
     m_actor->GetProperty()->SetSpecularPower(30.0);
+    // Backface coloring - darker color when viewing from "inside"
+    m_actor->GetProperty()->SetBackfaceCulling(false);
+    // Create and set backface property explicitly (GetBackfaceProperty returns nullptr by default)
+    auto backfaceProp = vtkSmartPointer<vtkProperty>::New();
+    backfaceProp->SetColor(0.4, 0.35, 0.35);  // dark brownish-grey
+    backfaceProp->SetAmbient(0.3);
+    backfaceProp->SetDiffuse(0.5);
+    m_actor->SetBackfaceProperty(backfaceProp);
     m_renderer->AddActor(m_actor);
 
     // scalar bar (hidden by default)
@@ -86,6 +146,11 @@ void VTKMeshWidget::buildPipeline()
     // interactor style
     auto style = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
     m_vtkWidget->interactor()->SetInteractorStyle(style);
+
+    // Orientation axes widget in corner (shows X/Y/Z directions)
+    // Note: Setup deferred - will be enabled on first setMesh() call
+    // to avoid issues with interactor not being ready
+    m_orientationWidget = nullptr;
 
     // event filter intercepts mouse events for pick mode
     m_vtkWidget->installEventFilter(this);
@@ -129,12 +194,29 @@ vtkSmartPointer<vtkPolyData> VTKMeshWidget::cgalToVTK(const SurfaceMesh& mesh)
     return normFilter->GetOutput();
 }
 
-void VTKMeshWidget::setMesh(const std::shared_ptr<ScanData>& scan)
+void VTKMeshWidget::setMesh(const std::shared_ptr<ScanData>& scan, bool doResetCamera)
 {
     if (!scan) return;
 
+    // Lazy initialization of orientation widget (interactor must be ready)
+    if (!m_orientationWidget && m_vtkWidget && m_vtkWidget->interactor()) {
+        auto axesActor = vtkSmartPointer<vtkAxesActor>::New();
+        axesActor->SetShaftTypeToCylinder();
+        axesActor->SetTotalLength(1.5, 1.5, 1.5);
+        axesActor->SetCylinderRadius(0.03);
+        axesActor->SetConeRadius(0.15);
+
+        m_orientationWidget = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
+        m_orientationWidget->SetOrientationMarker(axesActor);
+        m_orientationWidget->SetInteractor(m_vtkWidget->interactor());
+        m_orientationWidget->SetViewport(0.0, 0.0, 0.18, 0.18);  // bottom-left corner
+        m_orientationWidget->SetEnabled(1);
+        m_orientationWidget->InteractiveOff();
+    }
+
     auto pd = cgalToVTK(scan->mesh);
     m_polyData->DeepCopy(pd);
+    m_polyData->Modified();  // Ensure VTK knows data changed
     m_mapper->SetInputData(m_polyData);
     m_mapper->ScalarVisibilityOff();
     m_actor->GetProperty()->SetColor(0.85, 0.82, 0.78);
@@ -146,8 +228,37 @@ void VTKMeshWidget::setMesh(const std::shared_ptr<ScanData>& scan)
         info += "\n[" + scan->stlHeader + "]";
     m_titleLabel->setText(QString::fromStdString(info));
 
-    resetCamera();
+    if (doResetCamera) {
+        resetCamera();
+    }
     m_renderWindow->Render();
+}
+
+void VTKMeshWidget::clearMesh()
+{
+    // Clear all VTK data to prepare for safe destruction
+    clearPickActors();
+    clearOverlayActors();
+
+    // Reset polydata to empty
+    if (m_polyData) {
+        m_polyData->Initialize();
+    }
+
+    // Hide actors
+    if (m_actor) {
+        m_actor->VisibilityOff();
+    }
+    if (m_colorBar) {
+        m_colorBar->VisibilityOff();
+    }
+
+    // Force a final render to flush any pending operations
+    if (m_renderWindow) {
+        m_renderWindow->Render();
+    }
+
+    m_titleLabel->setText("");
 }
 
 void VTKMeshWidget::showDistanceMap(const std::shared_ptr<ScanData>& scan,
@@ -351,6 +462,8 @@ void VTKMeshWidget::clearPickActors()
 {
     for (auto& a : m_sphereActors) m_renderer->RemoveActor(a);
     m_sphereActors.clear();
+    for (auto& t : m_textActors) m_renderer->RemoveActor(t);
+    m_textActors.clear();
     for (auto& a : m_planeActors)  m_renderer->RemoveActor(a);
     m_planeActors.clear();
     m_renderWindow->Render();
@@ -365,10 +478,15 @@ void VTKMeshWidget::setPlanesVisible(bool visible)
 
 void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts)
 {
+    // Clear existing spheres and labels
     for (auto& a : m_sphereActors) m_renderer->RemoveActor(a);
     m_sphereActors.clear();
+    for (auto& t : m_textActors) m_renderer->RemoveActor(t);
+    m_textActors.clear();
 
+    int index = 1;
     for (const auto& pt : pts) {
+        // Create sphere
         auto sphere = vtkSmartPointer<vtkSphereSource>::New();
         sphere->SetCenter(pt[0], pt[1], pt[2]);
         sphere->SetRadius(0.6);
@@ -386,6 +504,23 @@ void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts
 
         m_renderer->AddActor(actor);
         m_sphereActors.push_back(actor);
+
+        // Create numbered text label (billboard - always faces camera)
+        auto textActor = vtkSmartPointer<vtkBillboardTextActor3D>::New();
+        textActor->SetInput(std::to_string(index).c_str());
+        // Position label slightly above and to the side of the sphere
+        textActor->SetPosition(pt[0] + 0.8, pt[1] + 0.8, pt[2] + 0.8);
+        textActor->GetTextProperty()->SetFontSize(24);
+        textActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // white text
+        textActor->GetTextProperty()->SetBackgroundColor(0.2, 0.2, 0.8); // blue background
+        textActor->GetTextProperty()->SetBackgroundOpacity(0.8);
+        textActor->GetTextProperty()->SetBold(true);
+        textActor->GetTextProperty()->SetJustificationToCentered();
+
+        m_renderer->AddActor(textActor);
+        m_textActors.push_back(textActor);
+
+        ++index;
     }
     m_renderWindow->Render();
 }
@@ -558,6 +693,109 @@ void VTKMeshWidget::hideBoundingBox()
     if (m_bboxActor) {
         m_renderer->RemoveActor(m_bboxActor);
         m_bboxActor = nullptr;
+        m_renderWindow->Render();
+    }
+}
+
+// ── Offscreen rendering ─────────────────────────────────────────────────────────
+
+bool VTKMeshWidget::renderToFile(const QString& filePath, int width, int height)
+{
+    // Store current size
+    int* oldSize = m_renderWindow->GetSize();
+    int oldWidth = oldSize[0];
+    int oldHeight = oldSize[1];
+
+    // Resize for rendering
+    m_renderWindow->SetSize(width, height);
+    m_renderWindow->Render();
+
+    // Capture to image
+    auto windowToImage = vtkSmartPointer<vtkWindowToImageFilter>::New();
+    windowToImage->SetInput(m_renderWindow);
+    windowToImage->SetScale(1);
+    windowToImage->SetInputBufferTypeToRGBA();
+    windowToImage->Update();
+
+    // Write PNG
+    auto writer = vtkSmartPointer<vtkPNGWriter>::New();
+    writer->SetFileName(filePath.toStdString().c_str());
+    writer->SetInputConnection(windowToImage->GetOutputPort());
+    writer->Write();
+
+    // Restore original size
+    m_renderWindow->SetSize(oldWidth, oldHeight);
+    m_renderWindow->Render();
+
+    return true;
+}
+
+void VTKMeshWidget::setOcclusalView()
+{
+    if (!m_polyData || m_polyData->GetNumberOfPoints() == 0) return;
+
+    double bounds[6];
+    m_polyData->GetBounds(bounds);
+
+    double centerX = (bounds[0] + bounds[1]) / 2.0;
+    double centerY = (bounds[2] + bounds[3]) / 2.0;
+    double centerZ = (bounds[4] + bounds[5]) / 2.0;
+    double sizeX = bounds[1] - bounds[0];
+    double sizeY = bounds[3] - bounds[2];
+    double sizeZ = bounds[5] - bounds[4];
+    double maxSize = std::max({sizeX, sizeY, sizeZ});
+
+    auto camera = m_renderer->GetActiveCamera();
+    camera->SetPosition(centerX, centerY, centerZ + maxSize * 2);
+    camera->SetFocalPoint(centerX, centerY, centerZ);
+    camera->SetViewUp(0, 1, 0);
+    camera->SetParallelProjection(true);
+    camera->SetParallelScale(maxSize * 0.6);
+
+    m_renderWindow->Render();
+}
+
+// ── Alignment QC Overlay ───────────────────────────────────────────────────────
+
+void VTKMeshWidget::showAlignmentOverlay(
+    const std::shared_ptr<ScanData>& scan,
+    const std::shared_ptr<SurfaceMesh>& reference,
+    double rangeMin, double rangeMax)
+{
+    if (!scan || !reference) return;
+
+    // First, show the scan with distance coloring
+    setMesh(scan, false);  // Don't reset camera yet
+    showDistanceMap(scan, rangeMin, rangeMax);
+
+    // Remove any existing reference overlay
+    hideReferenceOverlay();
+
+    // Create wireframe representation of the reference mesh
+    auto refPolyData = cgalToVTK(*reference);
+
+    auto refMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    refMapper->SetInputData(refPolyData);
+    refMapper->ScalarVisibilityOff();
+
+    m_referenceWireframeActor = vtkSmartPointer<vtkActor>::New();
+    m_referenceWireframeActor->SetMapper(refMapper);
+    m_referenceWireframeActor->GetProperty()->SetRepresentationToWireframe();
+    m_referenceWireframeActor->GetProperty()->SetColor(0.5, 0.5, 0.5);  // grey wireframe
+    m_referenceWireframeActor->GetProperty()->SetLineWidth(1.0);
+    m_referenceWireframeActor->GetProperty()->SetOpacity(0.5);
+    m_referenceWireframeActor->GetProperty()->LightingOff();
+
+    m_renderer->AddActor(m_referenceWireframeActor);
+    m_renderer->ResetCamera();
+    m_renderWindow->Render();
+}
+
+void VTKMeshWidget::hideReferenceOverlay()
+{
+    if (m_referenceWireframeActor) {
+        m_renderer->RemoveActor(m_referenceWireframeActor);
+        m_referenceWireframeActor = nullptr;
         m_renderWindow->Render();
     }
 }

@@ -87,6 +87,29 @@ int main(int argc, char *argv[])
     );
     parser.addOption(roiTemplateOption);
 
+    // External reference STL
+    QCommandLineOption externalRefOption(
+        QStringList() << "e" << "external-ref",
+        "Path to external reference STL (CAD or lab scanner).",
+        "file"
+    );
+    parser.addOption(externalRefOption);
+
+    // Pre-aligned scans flag
+    QCommandLineOption preAlignedOption(
+        "pre-aligned",
+        "Scans are pre-aligned (skip GPA, run ICP refinement only)."
+    );
+    parser.addOption(preAlignedOption);
+
+    // Alignments directory (pre-computed transforms from DentScanAlign)
+    QCommandLineOption alignmentsOption(
+        QStringList() << "a" << "alignments",
+        "Directory containing DentScanAlign JSON transform files.",
+        "directory"
+    );
+    parser.addOption(alignmentsOption);
+
     parser.process(app);
 
     // Determine mode
@@ -111,6 +134,9 @@ int main(int argc, char *argv[])
         QString dataRoot = parser.value(dataRootOption);
         QString outputDir = parser.value(outputOption);
         QString roiTemplatePath = parser.value(roiTemplateOption);
+        QString externalRefPath = parser.value(externalRefOption);
+        QString alignmentsDir = parser.value(alignmentsOption);
+        bool preAligned = parser.isSet(preAlignedOption);
         bool verbose = parser.isSet(verboseOption);
 
         std::cout << "Study file:  " << studyPath.toStdString() << "\n";
@@ -119,11 +145,32 @@ int main(int argc, char *argv[])
         if (!roiTemplatePath.isEmpty()) {
             std::cout << "ROI template: " << roiTemplatePath.toStdString() << "\n";
         }
+        if (!externalRefPath.isEmpty()) {
+            std::cout << "External ref: " << externalRefPath.toStdString() << "\n";
+        }
+        if (!alignmentsDir.isEmpty()) {
+            std::cout << "Alignments:   " << alignmentsDir.toStdString() << "\n";
+        }
+        if (preAligned) {
+            std::cout << "Pre-aligned:  YES (skip GPA, ICP refinement only)\n";
+        }
         std::cout << "\n" << std::flush;
 
         try {
             std::cout << "Loading configuration..." << std::flush;
             DentScanBatch::StudyConfig config = DentScanBatch::StudyConfig::loadFromFile(studyPath);
+
+            // Apply CLI overrides
+            if (!externalRefPath.isEmpty()) {
+                config.externalReferencePath = externalRefPath;
+                config.referenceStrategy = "external";
+            }
+            if (preAligned) {
+                config.scansPreAligned = true;
+            }
+            if (!alignmentsDir.isEmpty()) {
+                config.alignmentsDirectory = alignmentsDir;
+            }
             std::cout << " done.\n";
             std::cout << "Study: " << config.name.toStdString() << "\n\n" << std::flush;
 

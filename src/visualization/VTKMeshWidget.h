@@ -10,6 +10,8 @@
 #include <vtkActor.h>
 #include <vtkScalarBarActor.h>
 #include <vtkLookupTable.h>
+#include <vtkProp3D.h>
+#include <vtkOrientationMarkerWidget.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <Eigen/Core>
 #include <QPoint>
@@ -27,9 +29,10 @@ class VTKMeshWidget : public QWidget
     Q_OBJECT
 public:
     explicit VTKMeshWidget(QWidget* parent = nullptr);
-    ~VTKMeshWidget() override = default;
+    ~VTKMeshWidget() override;
 
-    void setMesh(const std::shared_ptr<ScanData>& scan);
+    void setMesh(const std::shared_ptr<ScanData>& scan, bool doResetCamera = true);
+    void clearMesh();  // Clear all mesh data and stop rendering
     void showDistanceMap(const std::shared_ptr<ScanData>& scan,
                          double rangeMin = -1.0, double rangeMax = 1.0);
 
@@ -70,6 +73,18 @@ public:
     // Show or hide the three occlusal-plane disk actors without removing them.
     void setPlanesVisible(bool visible);
 
+    // ── Offscreen rendering ───────────────────────────────────────────────────
+    // Render the current scene to a PNG file (for QC export).
+    // @param filePath Output PNG file path
+    // @param width Image width in pixels (default 800)
+    // @param height Image height in pixels (default 800)
+    // @return True if successful
+    bool renderToFile(const QString& filePath, int width = 800, int height = 800);
+
+    // Set camera to occlusal (top-down) view.
+    // Useful for creating consistent QC difference images.
+    void setOcclusalView();
+
     // Colour-code the mesh by segmentation: tooth = warm ivory,
     // gingiva = dark grey.  Pass an empty mask to revert to plain shading.
     void showToothSegmentation(const std::shared_ptr<ScanData>& scan,
@@ -81,6 +96,20 @@ public:
 
     // Hide the bounding box wireframe.
     void hideBoundingBox();
+
+    // Show alignment overlay: scan with distance coloring + reference as wireframe.
+    // This is useful for QC review to see how well the scan aligns with reference.
+    // @param scan The aligned scan with distance values computed
+    // @param reference The reference mesh to show as wireframe overlay
+    // @param rangeMin Minimum distance value for color mapping (mm)
+    // @param rangeMax Maximum distance value for color mapping (mm)
+    void showAlignmentOverlay(
+        const std::shared_ptr<ScanData>& scan,
+        const std::shared_ptr<SurfaceMesh>& reference,
+        double rangeMin = -0.5, double rangeMax = 0.5);
+
+    // Hide the reference wireframe overlay (keeps the scan visible).
+    void hideReferenceOverlay();
 
 signals:
     // Emitted when the user left-clicks a surface in pick mode.
@@ -110,7 +139,9 @@ private:
     std::vector<vtkSmartPointer<vtkActor>> m_overlayActors;
     std::vector<vtkSmartPointer<vtkActor>> m_sphereActors; // seed point spheres
     std::vector<vtkSmartPointer<vtkActor>> m_planeActors;  // three occlusal disks
+    std::vector<vtkSmartPointer<vtkProp3D>> m_textActors;  // numbered labels for spheres
     vtkSmartPointer<vtkActor>              m_bboxActor;    // wireframe bounding box
+    vtkSmartPointer<vtkActor>              m_referenceWireframeActor; // reference mesh wireframe
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;
@@ -118,4 +149,5 @@ private:
     vtkSmartPointer<vtkPolyDataMapper> m_mapper;
     vtkSmartPointer<vtkActor>          m_actor;
     vtkSmartPointer<vtkScalarBarActor> m_colorBar;
+    vtkSmartPointer<vtkOrientationMarkerWidget> m_orientationWidget;
 };

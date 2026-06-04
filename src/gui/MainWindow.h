@@ -4,6 +4,7 @@
 #include "../core/ToothSegmentation.h"
 #include "../config/StudyConfig.h"
 #include "../config/ROIConfig.h"
+#include "../qc/QCReviewWidget.h"
 #include <QMainWindow>
 #include <QTabWidget>
 #include <QListWidget>
@@ -45,6 +46,7 @@ private slots:
     void browseStudyFile();
     void browseDataRoot();
     void browseOutputDir();
+    void browseExternalRef();
     void loadStudyConfig();
 
     // ROI Template Editor
@@ -81,6 +83,14 @@ private slots:
     // Results
     void refreshResults();
 
+    // QC Review
+    void loadQCData();
+    void generateDifferenceImages();
+    void onQCViewRequested(const QString& scanId, const QString& imagePath);
+    void onQCReregisterRequested(const QString& scanId);
+    void onQCStatusChanged();
+    void onQCSaveRequested();
+
 private:
     void setupUI();
     void setupMenuBar();
@@ -88,6 +98,10 @@ private:
     void setupROITab();
     void setupBatchTab();
     void setupResultsTab();
+    void setupQCReviewTab();
+
+    void loadSettings();
+    void saveSettings();
 
     void updateStudyOverview();
     void updateROIVisualization();
@@ -133,6 +147,8 @@ private:
     QLineEdit* m_studyPathEdit = nullptr;
     QLineEdit* m_dataRootEdit = nullptr;
     QLineEdit* m_outputDirEdit = nullptr;
+    QLineEdit* m_externalRefEdit = nullptr;
+    class QCheckBox* m_scansPreAlignedChk = nullptr;
     QTreeWidget* m_studyTree = nullptr;
     QLabel* m_studyNameLabel = nullptr;
     QLabel* m_scannerCountLabel = nullptr;
@@ -197,4 +213,8 @@ private:
     QWidget* m_resultsTab = nullptr;
     QListWidget* m_outputFilesList = nullptr;
     QTextEdit* m_filePreview = nullptr;
+
+    // Tab 5: QC Review
+    QWidget* m_qcTab = nullptr;
+    DentScanBatch::QCReviewWidget* m_qcReviewWidget = nullptr;
 };

@@ -4,6 +4,8 @@
 #include "../core/GPAReference.h"
 #include "../core/DistanceField.h"
 #include "../core/ToothSegmentation.h"
+#include "../core/AlignmentTransformLoader.h"
+#include "../qc/QCExporter.h"
 #include <QFileInfo>
 #include <algorithm>
 #include <cmath>
@@ -26,14 +28,28 @@ GroupResult GroupProcessor::process(
     const GroupConfig& group,
     const std::vector<DiscoveredFile>& files,
     const AlignmentConfig& alignment,
-    const std::optional<ROITemplate>& roiTemplate)
+    const std::optional<ROITemplate>& roiTemplate,
+    const QString& outputDir,
+    const QString& externalRefPath,
+    bool scansPreAligned,
+    const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms)
 {
     GroupResult result;
     result.groupId = group.id;
     result.skd_mm = group.skd_mm;
     m_cancelled = false;
     m_currentStep = 0;
-    m_totalSteps = roiTemplate.has_value() && roiTemplate->useToothMask ? 7 : 6;
+
+    // Calculate total steps based on options
+    // New order: Load, Curvature, ToothMasks (if enabled), Alignment, Distances, Trueness, Precision
+    int steps = 5; // Load, Curvature, Distances, Trueness, Precision
+    if (!scansPreAligned && externalRefPath.isEmpty()) {
+        steps++; // GPA alignment
+    }
+    if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+        steps++; // Tooth segmentation (now before alignment)
+    }
+    m_totalSteps = steps;
 
     if (files.empty()) {
         result.errors.append("No files to process");
@@ -55,23 +71,29 @@ GroupResult GroupProcessor::process(
 
     if (m_cancelled) return result;
 
-    // Stage 3: Run GPA alignment
-    std::shared_ptr<SurfaceMesh> gpaMean;
-    if (!runGPAAlignment(scans, alignment, gpaMean, result)) {
-        return result;
+    // Stage 2.5: Apply precomputed transforms from DentScanAlign (if provided)
+    if (!precomputedTransforms.empty()) {
+        std::cout << "    Applying precomputed transforms..." << std::flush;
+        int applied = 0;
+        for (auto& scan : scans) {
+            std::string normalizedKey = AlignmentTransformLoader::normalizeFilePath(
+                QString::fromStdString(scan->filePath));
+            auto it = precomputedTransforms.find(normalizedKey);
+            if (it != precomputedTransforms.end()) {
+                // Apply the precomputed transform
+                ICPRegistration::applyTransform(*scan, it->second);
+                scan->transform = it->second;
+                applied++;
+                std::cout << "." << std::flush;
+            }
+        }
+        std::cout << " done (" << applied << "/" << scans.size() << " transforms applied)\n" << std::flush;
     }
-    result.gpaMean = gpaMean;
 
     if (m_cancelled) return result;
 
-    // Stage 4: Compute distances to GPA mean
-    if (!computeDistances(scans, gpaMean, result)) {
-        return result;
-    }
-
-    if (m_cancelled) return result;
-
-    // Stage 4.5 (optional): Compute tooth masks using template seeds
+    // Stage 3 (MOVED EARLIER): Compute tooth masks BEFORE alignment
+    // This allows masked ICP to focus on tooth surfaces
     std::vector<std::vector<bool>> toothMasks;
     if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
         emit progressUpdated(++m_currentStep, m_totalSteps, "Computing tooth segmentation");
@@ -82,18 +104,111 @@ GroupResult GroupProcessor::process(
 
     if (m_cancelled) return result;
 
+    // Stage 4: Get reference mesh (either external or GPA-computed)
+    std::shared_ptr<SurfaceMesh> referenceMesh;
+
+    if (!externalRefPath.isEmpty()) {
+        // Load external reference
+        emit progressUpdated(++m_currentStep, m_totalSteps, "Loading external reference");
+        std::cout << "    Loading external reference: " << externalRefPath.toStdString() << "..." << std::flush;
+
+        std::string errorMsg;
+        auto refScan = STLReader::read(externalRefPath.toStdString(), errorMsg);
+        if (!refScan) {
+            result.errors.append(QString("Failed to load external reference: %1").arg(QString::fromStdString(errorMsg)));
+            std::cout << " FAILED\n" << std::flush;
+            return result;
+        }
+        referenceMesh = std::make_shared<SurfaceMesh>(refScan->mesh);
+        std::cout << " done (" << referenceMesh->number_of_faces() << " triangles)\n" << std::flush;
+
+        // Pre-aligned scans skip GPA but still need ICP refinement against reference
+        if (scansPreAligned) {
+            std::cout << "    Scans pre-aligned (skipping GPA, running ICP refinement)\n" << std::flush;
+        }
+
+        // Run ICP alignment against external reference
+        emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement against reference");
+
+        // Use masked ICP if tooth masks are available
+        bool useMaskedICP = !toothMasks.empty();
+        if (useMaskedICP) {
+            std::cout << "    Running MASKED ICP refinement against reference..." << std::flush;
+        } else {
+            std::cout << "    Running ICP refinement against reference..." << std::flush;
+        }
+
+        ScanData refData;
+        refData.mesh = *referenceMesh;
+        refData.registered = true;
+
+        ICPRegistration::Params icpParams;
+        icpParams.maxIterations = alignment.maxIcpIterations;
+        icpParams.convergenceRms = alignment.convergenceThreshold;
+        // For pre-aligned scans, use tighter correspondence distance (already close)
+        if (scansPreAligned || !precomputedTransforms.empty()) {
+            icpParams.maxCorrespDist = 5.0;  // mm - scans are already roughly aligned
+        }
+
+        for (std::size_t i = 0; i < scans.size(); ++i) {
+            auto& scan = scans[i];
+            if (m_cancelled) return result;
+            std::cout << "." << std::flush;
+
+            ICPRegistration::Result icpResult;
+            if (useMaskedICP && i < toothMasks.size() && !toothMasks[i].empty()) {
+                // Use masked ICP - focuses alignment on tooth surfaces
+                icpResult = ICPRegistration::alignMasked(*scan, refData, toothMasks[i], icpParams);
+            } else {
+                // Fall back to full-mesh ICP
+                icpResult = ICPRegistration::align(*scan, refData, icpParams);
+            }
+
+            if (icpResult.converged) {
+                ICPRegistration::applyTransform(*scan, icpResult.transform);
+                scan->registered = true;
+            } else {
+                result.warnings.append(QString("ICP did not converge for: %1")
+                    .arg(QString::fromStdString(scan->filePath)));
+            }
+        }
+        std::cout << " done\n" << std::flush;
+    } else {
+        // Run GPA alignment (original behavior)
+        if (!runGPAAlignment(scans, alignment, referenceMesh, result)) {
+            return result;
+        }
+    }
+    result.gpaMean = referenceMesh;
+
+    if (m_cancelled) return result;
+
+    // Stage 5: Compute distances to reference
+    if (!computeDistances(scans, referenceMesh, result)) {
+        return result;
+    }
+
+    if (m_cancelled) return result;
+
     // Use ROI from template if provided, otherwise from group config
     const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
 
-    // Stage 5: Compute trueness metrics
+    // Stage 6: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
     computeTruenessMetrics(scans, files, effectiveROI, group, toothMasks, result);
 
     if (m_cancelled) return result;
 
-    // Stage 6: Compute precision metrics
+    // Stage 7: Compute precision metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
     computePrecisionMetrics(scans, files, effectiveROI, group, toothMasks, result);
+
+    if (m_cancelled) return result;
+
+    // Stage 8 (optional): Export QC data
+    if (!outputDir.isEmpty()) {
+        exportQCData(result, scans, files, outputDir, toothMasks);
+    }
 
     result.success = true;
     return result;
@@ -236,22 +351,22 @@ bool GroupProcessor::computeDistances(
         return false;
     }
 
-    // Create a reference ScanData for distance computation
-    ScanData refData;
-    refData.mesh = *gpaMean;
+    // Build AABB tree once for the reference mesh (important for large references!)
+    std::cout << "\n";
+    DistanceField::ReferenceTree refTree(*gpaMean);
+    std::cout << "    Computing distances";
 
     for (auto& scan : scans) {
         if (m_cancelled) return false;
 
         scan->distanceToRef.clear();
-        DistanceField::compute(*scan, refData);
+        refTree.computeDistances(*scan);
 
         if (scan->distanceToRef.empty()) {
             result.warnings.append(QString("Distance computation failed for: %1")
                 .arg(QString::fromStdString(scan->filePath)));
             continue;
         }
-        scan->distanceComputed = true;
         std::cout << "." << std::flush;
     }
 
@@ -554,6 +669,34 @@ std::vector<std::vector<bool>> GroupProcessor::computeToothMasks(
     }
 
     return masks;
+}
+
+void GroupProcessor::exportQCData(
+    const GroupResult& result,
+    const std::vector<std::shared_ptr<ScanData>>& scans,
+    const std::vector<DiscoveredFile>& files,
+    const QString& outputDir,
+    const std::vector<std::vector<bool>>& toothMasks)
+{
+    std::cout << "    Exporting QC data..." << std::flush;
+
+    QStringList errors = QCExporter::exportGroupQC(
+        result, scans, files, outputDir, toothMasks);
+
+    // Export segmented meshes (tooth-only surfaces)
+    if (!toothMasks.empty()) {
+        std::cout << "\n    Exporting segmented meshes..." << std::flush;
+        QStringList segErrors = QCExporter::exportSegmentedMeshes(
+            scans, files, toothMasks, outputDir);
+        errors.append(segErrors);
+        std::cout << " done (" << toothMasks.size() << " meshes)" << std::flush;
+    }
+
+    for (const QString& err : errors) {
+        std::cout << "\n      Warning: " << err.toStdString() << std::flush;
+    }
+
+    std::cout << " done\n" << std::flush;
 }
 
 } // namespace DentScanBatch

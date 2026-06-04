@@ -6,6 +6,7 @@ set(CORE_SOURCES
     core/GPAReference.cpp
     core/DistanceField.cpp
     core/ToothSegmentation.cpp
+    core/AlignmentTransformLoader.cpp
 )
 
 # Visualization sources (reused from DentScanCompare)
@@ -28,6 +29,17 @@ set(BATCH_SOURCES
     batch/CSVWriter.cpp
 )
 
+# QC (Quality Control) sources
+set(QC_SOURCES
+    qc/QCExporter.cpp
+    qc/ErrandManager.cpp
+    qc/LandmarkRegistration.cpp
+    qc/QCReviewWidget.cpp
+    qc/QFlowLayout.cpp
+    qc/ErrandResolutionDialog.cpp
+    qc/AlignmentQCDialog.cpp
+)
+
 # GUI sources
 set(GUI_SOURCES
     gui/MainWindow.cpp
@@ -39,6 +51,7 @@ set(SOURCES
     ${VIS_SOURCES}
     ${CONFIG_SOURCES}
     ${BATCH_SOURCES}
+    ${QC_SOURCES}
     ${GUI_SOURCES}
 )
 

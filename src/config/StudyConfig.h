@@ -69,7 +69,10 @@ public:
     // Study metadata
     QString name;
     int version = 1;
-    QString referenceStrategy = "gpa_mean";  // "gpa_mean" or "fixed_scanner: <name>"
+    QString referenceStrategy = "gpa_mean";  // "gpa_mean", "fixed_scanner:<name>", or "external"
+    QString externalReferencePath;           // Path to external reference STL (when referenceStrategy == "external")
+    bool scansPreAligned = false;            // If true, skip GPA alignment (scans already aligned by DentScanAlign)
+    QString alignmentsDirectory;             // Directory containing DentScanAlign JSON transform files
 
     // Scanner definitions
     std::vector<ScannerDef> scanners;

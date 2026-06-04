@@ -63,7 +63,8 @@ src/
 │   ├── ICPRegistration.{h,cpp}     Point-to-plane ICP (nanoflann + Eigen)
 │   ├── GPAReference.{h,cpp}        GPA: PCA → 4-orient test → ICP → mean mesh
 │   ├── DistanceField.{h,cpp}       CGAL AABB-tree → per-vertex signed distances
-│   └── ToothSegmentation.{h,cpp}   Dijkstra-based crown segmentation from seed points
+│   ├── ToothSegmentation.{h,cpp}   Dijkstra-based crown segmentation from seed points
+│   └── AlignmentTransformLoader.{h,cpp}  Load DentScanAlign JSON transforms
 ├── config/                     Configuration parsing
 │   ├── ROIConfig.{h,cpp}       ROI structures + ROITemplate JSON I/O
 │   ├── StudyConfig.{h,cpp}     JSON/YAML study configuration
@@ -72,8 +73,16 @@ src/
 │   ├── BatchRunner.{h,cpp}     Orchestrates all group processing
 │   ├── GroupProcessor.{h,cpp}  Processes one SKD group
 │   └── CSVWriter.{h,cpp}       Output CSV files
+├── qc/                         Quality Control workflow
+│   ├── QCExporter.{h,cpp}      Export GPA means, transforms, difference images, segmented meshes
+│   ├── ErrandManager.{h,cpp}   Track accept/reject status, filter CSV output
+│   ├── LandmarkRegistration.{h,cpp}  Kabsch algorithm + ICP refinement
+│   ├── QCReviewWidget.{h,cpp}  Thumbnail grid for quick visual review
+│   ├── QFlowLayout.{h,cpp}     Flow layout for thumbnail grid
+│   ├── ErrandResolutionDialog.{h,cpp}  Interactive re-registration dialog
+│   └── AlignmentQCDialog.{h,cpp}   Detailed alignment QC with reference overlay
 ├── gui/                        Interactive ROI template editor
-│   └── MainWindow.{h,cpp}      Main window with tabs for config, ROI, batch, results
+│   └── MainWindow.{h,cpp}      Main window with tabs (config, ROI, batch, results, QC)
 └── visualization/              VTK rendering (copied from DentScanCompare)
     ├── VTKMeshWidget.{h,cpp}
     └── ColorMapLUT.{h,cpp}
@@ -165,6 +174,9 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
     --data-root /path/to/scanner/data \
     --output /path/to/results \
     --roi-template roi_template.json \
+    --alignments alignments/ \
+    --external-ref reference.stl \
+    --pre-aligned \
     --verbose
 ```
 
@@ -174,6 +186,9 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
 - `--data-root` / `-d`: Root directory containing scanner folders
 - `--output` / `-o`: Output directory for CSV files (default: ./results)
 - `--roi-template` / `-r`: Optional ROI template with tooth segmentation settings
+- `--alignments` / `-a`: Directory containing DentScanAlign JSON transform files
+- `--external-ref` / `-e`: External reference STL (CAD or lab scanner)
+- `--pre-aligned`: Skip GPA computation (scans already coarsely aligned)
 - `--verbose`: Print detailed progress information
 
 ### Incremental Save & Resume
@@ -210,6 +225,137 @@ Resuming from previous run. Already completed: 3 groups.
 
 ---
 
+## QC Workflow
+
+The QC (Quality Control) workflow enables visual verification of registration results and interactive correction of failures.
+
+### Batch QC Output
+
+When batch processing completes, a `qc/` folder is created with:
+
+```
+results/qc/
+├── gpa_means/                    # GPA reference meshes (one per SKD group)
+│   ├── SKD_18_gpa_mean.stl
+│   ├── SKD_20_gpa_mean.stl
+│   └── ...
+├── transforms/                   # Transform matrices + metrics per scan
+│   ├── iTeroLumina_SKD_18_r1.json
+│   ├── Primescan_SKD_20_r1.json
+│   └── ...
+├── segmented/                    # Tooth-only meshes (when tooth mask is used)
+│   ├── iTeroLumina_SKD_18_r1.stl
+│   ├── Primescan_SKD_20_r1.stl
+│   └── ...
+└── difference_images/            # (Currently disabled - see Known Issues)
+    └── *.png
+```
+
+**Transform JSON format:**
+```json
+{
+  "transform": [[r00,r01,r02,tx], [r10,r11,r12,ty], [r20,r21,r22,tz], [0,0,0,1]],
+  "metrics": {
+    "rms_mm": 0.045,
+    "mad_mm": 0.032,
+    "hausdorff95_mm": 0.12,
+    "hausdorff100_mm": 0.28,
+    "signed_mean_mm": -0.002,
+    "coverage_pct": 98.5,
+    "vertices_included": 45230,
+    "vertices_total": 45890
+  },
+  "scanner": "Primescan",
+  "group": "SKD_20",
+  "repetition": 1,
+  "file_path": "/path/to/scan.stl"
+}
+```
+
+### QC Review Widget
+
+The GUI includes a QC Review tab (Tab 5) with:
+- Thumbnail grid of difference images (when available)
+- Group filtering dropdown
+- Click to view details, double-click to toggle accept/errand status
+- Color-coded borders: green=accepted, red=errand, grey=pending
+- Status counts: Errands / Accepted / Pending
+
+### Errand Resolution Dialog
+
+For flagged scans (errands), the ErrandResolutionDialog provides a **three-panel layout**:
+
+```
+┌──────────────────────┬──────────────────────┬────────────────────────┐
+│  GPA REFERENCE       │  SCAN (aligning)     │  DIFFERENCE MAP        │
+│  ┌────────────────┐  │  ┌────────────────┐  │  ┌────────────────┐    │
+│  │   [3D mesh]    │  │  │   [3D mesh]    │  │  │   [color map]  │    │
+│  │   • Pick pts   │  │  │   • Pick pts   │  │  │                │    │
+│  └────────────────┘  │  └────────────────┘  │  └────────────────┘    │
+│  Points: 3 picked    │  Points: 3 picked    │  RMS: 0.045 mm         │
+├──────────────────────┴──────────────────────┴────────────────────────┤
+│  [Compute Alignment]  [Run ICP]        [Accept Result]  [Reject/Skip]│
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Workflow:**
+1. Pick 3+ corresponding landmarks on GPA Reference and Scan views
+2. Click "Compute Alignment" - Kabsch algorithm computes initial rigid transform
+3. Difference map auto-updates showing color-coded distances
+4. Optional: Click "Run ICP" for fine refinement
+5. Accept → re-add to CSV with corrected metrics; Reject → keep excluded
+
+**Features:**
+- Landmark spheres cleared after alignment (don't float in wrong position)
+- Pick mode disabled after alignment (no accidental clicks)
+- Difference map auto-updates after alignment and ICP
+- Settings persisted via QSettings (survives crashes)
+
+### LandmarkRegistration Algorithm
+
+```cpp
+// 1. Compute centroids
+Eigen::Vector3d srcCentroid = mean(sourcePoints);
+Eigen::Vector3d tgtCentroid = mean(targetPoints);
+
+// 2. Center the points
+MatrixXd P = sourcePoints - srcCentroid;  // 3xN
+MatrixXd Q = targetPoints - tgtCentroid;  // 3xN
+
+// 3. Cross-covariance matrix
+Matrix3d H = P * Q.transpose();
+
+// 4. SVD for optimal rotation
+JacobiSVD<Matrix3d> svd(H, ComputeFullU | ComputeFullV);
+Matrix3d R = svd.matrixV() * svd.matrixU().transpose();
+
+// 5. Handle reflection
+if (R.determinant() < 0) {
+    Matrix3d V = svd.matrixV();
+    V.col(2) *= -1;
+    R = V * svd.matrixU().transpose();
+}
+
+// 6. Translation
+Vector3d t = tgtCentroid - R * srcCentroid;
+```
+
+### Known Issue: Difference Image Export
+
+VTK offscreen rendering crashes in headless batch mode due to GLEW/OpenGL initialization failure. The error is:
+```
+vtkGenericOpenGLRenderWindow: GLEW could not be initialized: Missing GL version
+```
+
+**Current workaround:** Image export is disabled in batch mode. GPA meshes (STL) and transforms (JSON) are still exported. Difference images can be generated in GUI mode.
+
+**Potential solutions for future:**
+1. Build VTK with OSMesa support for software rendering
+2. Use EGL backend for headless GPU rendering
+3. Generate images in a separate GUI post-processing step
+
+---
+
 ## Known Pitfalls
 
 ### CGAL 6.0 property_map API Change
@@ -237,6 +383,41 @@ These scanners use coordinate system 28 mm offset from others. PCA coarse alignm
 
 VTK objects are NOT thread-safe. All VTK rendering must happen on the main thread. Use Qt signals to communicate results from worker threads.
 
+### VTK Widget Cleanup on Dialog Destruction
+
+When a QDialog containing VTKMeshWidget is destroyed, VTK may crash if cleanup isn't done properly. Key learnings:
+
+**DO NOT:**
+- Call `clearMesh()` in dialog destructor - triggers Render() during destruction
+- Call `setRenderWindow(nullptr)` in VTKMeshWidget destructor - ambiguous overload issues
+- Immediately refresh other widgets after dialog closes - memory may still be corrupt
+
+**DO:**
+- Let Qt handle natural widget destruction order
+- Clear smart pointer references in dialog destructor (just `.reset()` them)
+- Defer any operations that allocate memory (like QPixmap loading) using QTimer::singleShot
+- Call `QApplication::processEvents()` multiple times after dialog closes
+
+```cpp
+// In dialog destructor - minimal cleanup:
+ErrandResolutionDialog::~ErrandResolutionDialog()
+{
+    // Just release mesh data references, don't call VTK methods
+    m_scan.reset();
+    m_scanBackup.reset();
+    m_gpaRef.reset();
+    m_refData.reset();
+}
+
+// In MainWindow after dialog closes:
+QApplication::processEvents();
+QTimer::singleShot(100, this, [this]() {
+    m_qcReviewWidget->refresh();  // Deferred to allow VTK cleanup
+});
+```
+
+**Note:** This is still an active issue. The crash may occur due to OpenGL context sharing or VTK internal state corruption.
+
 ### Qt Signal Cascades
 
 When programmatically changing checkable buttons, wrap in `QSignalBlocker` to prevent handler cascades:
@@ -254,7 +435,51 @@ Original recursive glob implementation was extremely slow. Current implementatio
 
 ---
 
-## Current Status (as of 2026-06-03)
+## Current Status (as of 2026-06-04)
+
+### Active Issues Under Investigation
+
+#### 1. Coordinate System Mismatch (90-Degree Rotation)
+
+Different scanners use different coordinate systems:
+- **Some scanners**: Y-axis is "up" (occlusal direction)
+- **GPA reference**: Z-axis is "up" (occlusal direction)
+
+**Observed in landmark pairs:**
+```
+Scan Y values: ~5-6 (constant) → Y is vertical
+Ref  Z values: ~5.6-6.2 (constant) → Z is vertical
+```
+
+The Kabsch algorithm computes a transform that includes the ~90° X-axis rotation, but visual feedback suggests alignment may be off. Debug output now prints the full 4×4 transform matrix to verify:
+```
+=== Kabsch Transform Matrix ===
+[  R00,   R01,   R02,   tx]
+[  R10,   R11,   R12,   ty]
+[  R20,   R21,   R22,   tz]
+[  0.0,   0.0,   0.0,  1.0]
+```
+
+**Expected rotation (Y-up → Z-up, +90° around X):**
+```
+R = [1   0    0 ]
+    [0   0   -1 ]
+    [0   1    0 ]
+```
+
+#### 2. VTK Cleanup Crash on Dialog Close
+
+**Symptom:** Segfault or std::bad_alloc when closing ErrandResolutionDialog
+
+**Root cause:** VTK Render() calls during widget destruction corrupt memory, affecting subsequent allocations (e.g., QPixmap in QCReviewWidget::refresh()).
+
+**Current fix (partial):**
+1. Removed `clearMesh()` calls from dialog destructor
+2. Simplified VTKMeshWidget destructor cleanup order
+3. Added `QTimer::singleShot(100ms)` to defer QC refresh after dialog closes
+4. Multiple `QApplication::processEvents()` calls to flush pending operations
+
+**Still under investigation** - crash may still occur.
 
 ### Implemented
 - Full CLI batch mode with JSON configuration
@@ -270,6 +495,7 @@ Original recursive glob implementation was extremely slow. Current implementatio
   - ROI Template Editor with interactive 3D visualization
   - Batch processing with progress monitoring
   - Results file browser with CSV preview
+  - **QC Review tab** (new - see QC Workflow section)
 - Full multi-scanner batch configuration (`data/full_study.json`)
 - **Tooth segmentation** - Dijkstra-based crown region growing:
   - Interactive seed point placement on tooth cusps
@@ -280,6 +506,21 @@ Original recursive glob implementation was extremely slow. Current implementatio
   - Load ROI template with tooth segmentation seeds
   - Apply tooth masks to all scans in batch mode
   - Seeds snapped to nearest mesh vertices after GPA alignment
+- **QC Workflow** (functional - see details below):
+  - GPA mean mesh export (STL) per group
+  - Transform + metrics export (JSON) per scan
+  - Segmented mesh export (tooth-only STL) when tooth masks are used
+  - ErrandManager for accept/reject tracking
+  - QCReviewWidget thumbnail grid UI with group filtering
+  - LandmarkRegistration with Kabsch algorithm
+  - ErrandResolutionDialog with three-panel layout (ref/scan/diff)
+  - AlignmentQCDialog for detailed overlay view (reference wireframe + colored scan)
+  - Difference images generated in GUI mode
+  - Settings persistence via QSettings (paths survive crashes)
+- **DentScanAlign Integration**:
+  - Load pre-computed transforms from DentScanAlign JSON files (`--alignments` option)
+  - Apply transforms as initialization before ICP refinement
+  - Masked ICP: use tooth segmentation mask to focus alignment on tooth surfaces
 
 ### Test Results (Full study: 6 scanners × 7 SKD levels)
 - 185 scans total (5 repetitions per scanner per SKD)
@@ -288,17 +529,197 @@ Original recursive glob implementation was extremely slow. Current implementatio
 - Trueness RMS: 0.032–0.074 mm (typical range)
 - Precision Mean RMS: ~0.27 mm (pairwise comparisons)
 
-### Not Yet Implemented
+### Not Yet Implemented / Known Issues
+- **Difference image export**: Disabled in batch mode due to VTK headless rendering crash (GLEW/OpenGL initialization fails without display). GPA meshes and transforms still export.
 - YAML configuration support (JSON only currently working)
 - Statistical output enhancement (R-ready format, effect sizes)
+- QC Review UI needs testing with real QC data
 
 ---
 
 ## Next Steps
 
-1. **Statistical enhancements**: Add R-ready output format, compute effect sizes
-2. **GUI refinements**: Progress signals from BatchRunner to GUI, better error handling
-3. **Occlusal plane in batch mode**: Currently GUI-only; save/load plane definition in ROI template
+1. **Fix VTK headless rendering**: Enable difference image export in batch mode
+   - Option A: Rebuild VTK with OSMesa support
+   - Option B: Use EGL backend for headless GPU rendering
+   - Option C: Generate images in GUI post-processing step
+2. **Test QC Review workflow**: Verify thumbnail loading, errand flagging, CSV filtering
+3. **Test ErrandResolutionDialog**: Verify landmark picking, Kabsch alignment, ICP refinement
+4. **Statistical enhancements**: Add R-ready output format, compute effect sizes
+5. **Occlusal plane in batch mode**: Currently GUI-only; save/load plane definition in ROI template
+
+---
+
+## Proposed Architecture: Multi-Reference, Multi-Pass Evaluation
+
+*Analysis date: 2026-06-03*
+
+### Research Context
+
+The project compares different intraoral scanners across clinical situations (SKD levels). Key insights:
+
+1. **Multiple reference standards available:**
+   - GPA Mean (computed consensus from all scans)
+   - CAD STL (ground truth design intent)
+   - Laboratory scanner (high-accuracy physical measurement)
+
+2. **Two-stage evaluation needed:**
+   - **Full mesh**: Teeth + gums (higher RMS due to gum deformation)
+   - **Teeth only**: Rigid structures, expect lower RMS
+
+3. **QC is mandatory early**: Before statistics, must confirm registration found global minimum
+
+4. **Transform reuse**: Apply successful full-mesh registration as starting point for masked evaluation
+
+### Abstract Workflow Model
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  PHASE 1: REGISTRATION + QC (Mandatory Checkpoint)                  │
+│  ═══════════════════════════════════════════════════                │
+│                                                                     │
+│  Input: Raw STL scans (variable orientation)                        │
+│  Output: Validated transforms (4×4 matrices)                        │
+│                                                                     │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
+│  │  Coarse  │───▶│   Fine   │───▶│  Visual  │───▶│ Approved │      │
+│  │ Alignment│    │   ICP    │    │    QC    │    │Transforms│      │
+│  └──────────┘    └──────────┘    └────┬─────┘    └──────────┘      │
+│                                       │                             │
+│                                       ▼ (if failed)                 │
+│                                  ┌──────────┐                       │
+│                                  │ Landmark │                       │
+│                                  │Pre-align │───▶ Re-run ICP        │
+│                                  └──────────┘                       │
+│                                                                     │
+│  Reference options: GPA Mean | CAD STL | Lab Scanner                │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼ (transforms only, QC approved)
+┌─────────────────────────────────────────────────────────────────────┐
+│  PHASE 2: METRIC EVALUATION (Multiple Passes)                       │
+│  ════════════════════════════════════════════                       │
+│                                                                     │
+│  Input: Approved transforms + Original STLs + Reference(s)          │
+│  Output: Metrics CSVs per evaluation pass                           │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  PASS: "full"                                               │    │
+│  │  • Apply saved transform to original STL                    │    │
+│  │  • Compute distances to reference (full mesh)               │    │
+│  │  • Output: trueness_full.csv, precision_full.csv            │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  PASS: "teeth_only"                                         │    │
+│  │  • Apply saved transform (from "full" pass)                 │    │
+│  │  • Apply segmentation mask (teeth template)                 │    │
+│  │  • Optional: Refine registration on masked region           │    │
+│  │  • Compute distances (masked vertices only)                 │    │
+│  │  • Output: trueness_teeth.csv, precision_teeth.csv          │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  Additional passes possible: ROI regions, individual teeth, etc.    │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Abstractions
+
+#### 1. Reference Source (Pluggable)
+
+```
+ReferenceType:
+  - GPA_MEAN      → Computed from scan group (current implementation)
+  - EXTERNAL_STL  → CAD file or lab scanner per group
+  - MULTI_TARGET  → Compare against multiple references simultaneously
+```
+
+#### 2. Evaluation Pass (Repeatable)
+
+```
+EvaluationPass:
+  - name: "full" | "teeth_only" | "roi_region" | ...
+  - mask: none | template_path
+  - reference: which reference mesh(es) to compare against
+  - refine_registration: bool (fine-tune ICP on masked region)
+  - inherit_transform_from: null | "pass_name"
+```
+
+#### 3. Transform as First-Class Output
+
+```
+Transform persistence:
+  - Saved after registration (JSON with 4×4 matrix)
+  - Can be applied to any STL (load → transform → evaluate)
+  - Can be refined (masked ICP) and saved as new version
+  - Enables: full → masked workflow without full re-registration
+```
+
+#### 4. QC as Mandatory Gate
+
+```
+Pipeline stages:
+  1. Registration → produces transforms (NOT metrics)
+  2. QC Review → approve/reject/fix each transform
+  3. Metrics → only computed on QC-approved transforms
+```
+
+### Proposed Configuration Structure
+
+```yaml
+study:
+  name: "Scanner Comparison Study"
+
+references:
+  gpa_mean: { type: computed }
+  cad: { type: external, path_pattern: "{group}_cad.stl" }
+  lab_scanner: { type: external, path_pattern: "{group}_lab.stl" }
+
+registration:
+  primary_reference: gpa_mean    # or cad, lab_scanner
+  coarse_method: pca             # or landmarks
+  fine_method: icp
+  qc_required: true              # Mandatory checkpoint before metrics
+
+evaluation_passes:
+  - name: full
+    mask: none
+    reference: [gpa_mean, cad, lab_scanner]  # Compare to all three
+
+  - name: teeth_only
+    mask: teeth_template.json
+    inherit_transform: full      # Reuse alignment from full pass
+    refine_registration: true    # Fine-tune on teeth only
+    reference: [gpa_mean, cad, lab_scanner]
+```
+
+### Implementation Comparison
+
+| Current Implementation | Proposed Architecture |
+|------------------------|----------------------|
+| Registration + metrics in one batch pass | Registration separate from metrics |
+| GPA mean hardcoded as reference | Pluggable reference source |
+| Single evaluation (full mesh) | Multiple evaluation passes |
+| QC optional/post-hoc | QC mandatory gate before metrics |
+| Transforms saved but underutilized | Transforms are primary output, reusable |
+
+### Implementation Priority
+
+1. **Immediate**: Complete QC workflow for visual verification of registrations
+2. **Next**: Add external reference support (CAD/lab scanner as alternative to GPA)
+3. **Then**: Implement multi-pass evaluation (full → masked with transform reuse)
+4. **Finally**: Transform refinement for masked regions
+
+### Benefits of This Architecture
+
+- **Flexibility**: Same scan data, multiple evaluation configurations
+- **Reproducibility**: Saved transforms enable exact replication
+- **Efficiency**: Transform reuse avoids redundant registration
+- **Quality**: Mandatory QC catches registration failures early
+- **Comparability**: Multiple references answer different research questions:
+  - CAD → How accurately do scanners reproduce designed geometry?
+  - Lab scanner → How do IOS compare to high-accuracy bench scanner?
+  - GPA mean → Which scans deviate from consensus? (outlier detection)
 
 ---
 
@@ -312,6 +733,119 @@ Original recursive glob implementation was extremely slow. Current implementatio
 ---
 
 ## Changelog
+
+### 2026-06-04 – Masked ICP, DentScanAlign Integration, and Enhanced QC
+
+**Feature 1: Load DentScanAlign JSON Transforms**
+- New `AlignmentTransformLoader.{h,cpp}` module parses JSON files from alignments/ directory
+- Extracts `transform_4x4` (16-element row-major array) → Eigen::Matrix4d
+- Returns map: normalized source_file path → transform
+- Added `alignmentsDirectory` field to StudyConfig
+- Added `-a, --alignments <directory>` CLI option
+
+**Feature 2: Masked ICP Using Tooth Segmentation**
+- Reordered GroupProcessor pipeline: tooth masks now computed BEFORE alignment
+- Uses `ICPRegistration::alignMasked()` when tooth masks are available
+- Focuses ICP alignment on tooth surfaces only, excluding gingiva
+- Falls back to full-mesh ICP if mask is unavailable or too small
+
+**Feature 3: Enhanced QC Visualization**
+- New `AlignmentQCDialog.{h,cpp}` shows reference mesh + aligned scan overlay
+- Reference displayed as grey wireframe, scan as distance-colored solid surface
+- Metrics summary (RMS, Max, Coverage) with color-coding
+- Accept/Flag/Skip buttons for quick QC decisions
+- Double-click on QCReviewWidget thumbnail opens AlignmentQCDialog
+- Added `showAlignmentOverlay()` and `hideReferenceOverlay()` to VTKMeshWidget
+
+**Feature 4: Segmented Mesh Export**
+- New `QCExporter::extractSubmesh()` creates mesh from vertex mask
+- New `QCExporter::exportSegmentedMesh()` exports tooth-only STL
+- Segmented meshes exported to `qc/segmented/` directory
+- GroupProcessor now exports segmented meshes when tooth masks are available
+
+**Files Added:**
+- `src/core/AlignmentTransformLoader.{h,cpp}`
+- `src/qc/AlignmentQCDialog.{h,cpp}`
+
+**Files Modified:**
+- `src/config/StudyConfig.{h,cpp}` - Added alignmentsDirectory field
+- `src/main.cpp` - Added --alignments CLI option
+- `src/batch/GroupProcessor.{h,cpp}` - Reordered pipeline, masked ICP, precomputed transforms
+- `src/batch/BatchRunner.cpp` - Load and pass precomputed transforms
+- `src/visualization/VTKMeshWidget.{h,cpp}` - Added alignment overlay methods
+- `src/qc/QCExporter.{h,cpp}` - Added submesh extraction and segmented mesh export
+- `src/qc/QCReviewWidget.cpp` - Double-click emits viewRequested signal
+- `src/gui/MainWindow.cpp` - Wire up AlignmentQCDialog
+- `src/CMakeLists.txt` - Added new source files
+
+### 2026-06-03 – Landmark Registration Debugging (Part 5)
+
+**Coordinate System Investigation:**
+- Identified Y-up vs Z-up coordinate system mismatch between scanners and GPA reference
+- Added transform matrix debug output to verify Kabsch rotation computation
+- Prints full 4×4 matrix after each landmark alignment
+
+**VTK Cleanup Crash Fix (Iteration 3):**
+- Removed `clearMesh()` calls from ErrandResolutionDialog destructor
+- Simplified VTKMeshWidget destructor (removed `setRenderWindow(nullptr)` call)
+- Deferred QCReviewWidget::refresh() by 100ms using QTimer::singleShot
+- Added multiple processEvents() calls after dialog closes
+
+**Files Modified:**
+- `src/qc/ErrandResolutionDialog.cpp` - Added transform matrix debug output, simplified destructor
+- `src/visualization/VTKMeshWidget.cpp` - Simplified destructor cleanup order
+- `src/gui/MainWindow.cpp` - Added QTimer include, deferred refresh with lambda capture
+
+### 2026-06-03 – ErrandResolutionDialog Improvements
+
+**Three-Panel Layout:**
+- Redesigned dialog with three views: GPA Reference (left), Scan (middle), Difference Map (right)
+- Wider minimum size (1400x700) to accommodate all three panels
+- Difference map auto-updates after alignment and ICP refinement
+
+**Landmark Registration UX:**
+- Landmark spheres now cleared after alignment (previously floated in wrong position)
+- Pick mode disabled after alignment to prevent accidental picks
+- Removed "Show Difference Map" button - now automatic
+
+**Crash Fix - VTK Widget Cleanup:**
+- Added `clearMesh()` method to VTKMeshWidget for safe cleanup
+- Dialog destructor now clears VTK widgets before Qt destroys them
+- Prevents segmentation faults on dialog close
+
+**Settings Persistence:**
+- Path fields (study, data root, output dir, template) now save immediately on change
+- Uses QSettings with QSignalBlocker to avoid save-during-load
+- Paths persist even if app crashes
+
+**Technical Details:**
+- Added `m_diffView` and `m_diffLabel` members to ErrandResolutionDialog
+- Added `updateDifferenceView()` private method
+- VTKMeshWidget::clearMesh() clears polydata, hides actors, flushes render
+
+### 2026-06-03 – QC Workflow Implementation
+
+**New QC Module (`src/qc/`):**
+- `QCExporter.{h,cpp}` - Export GPA mean meshes (STL), transform matrices (JSON), and difference images (PNG, currently disabled)
+- `ErrandManager.{h,cpp}` - Track accept/reject status for all scans, filter CSV output
+- `LandmarkRegistration.{h,cpp}` - Kabsch algorithm for corresponding point registration + ICP refinement
+- `QCReviewWidget.{h,cpp}` - Thumbnail grid for quick visual review with accept/flag workflow
+- `QFlowLayout.{h,cpp}` - Flow layout widget for thumbnail arrangement
+- `ErrandResolutionDialog.{h,cpp}` - Interactive re-registration dialog with side-by-side mesh views
+
+**Batch Processing Changes:**
+- GroupProcessor now exports QC data (GPA mean + transforms) after processing each group
+- QCExporter::setImageExportEnabled(false) called in batch mode to avoid VTK crash
+- QC directory structure created: `qc/gpa_means/`, `qc/transforms/`, `qc/difference_images/`
+
+**GUI Changes:**
+- Added QC Review tab (Tab 5) to MainWindow
+- QCReviewWidget integrated with thumbnail grid and status tracking
+- ErrandResolutionDialog accessible for flagged scans
+
+**Known Issue:**
+- Difference image export disabled in batch mode due to VTK GLEW initialization failure in headless environment
+- GPA meshes and transforms still export successfully
 
 ### 2026-06-03 – ROI template batch integration + GUI improvements
 

@@ -3,6 +3,7 @@
 #include <QTextStream>
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
 #include <cmath>
 #include <map>
 
@@ -320,6 +321,63 @@ QStringList CSVWriter::appendGroupResult(
     QString precisionPath = dir.filePath(precisionFilename);
     if (!appendPrecisionCSV(result.precisionReports, precisionPath)) {
         errors.append(QString("Failed to append to: %1").arg(precisionPath));
+    }
+
+    return errors;
+}
+
+QString CSVWriter::makeScanId(const BatchMetricReport& report)
+{
+    // Generate consistent scan ID matching QCExporter::makeScanFilename
+    QString safeName = QString::fromStdString(report.scannerName);
+    safeName.replace(QLatin1Char(' '), QLatin1Char('_'));
+    safeName.replace(QLatin1Char('/'), QLatin1Char('_'));
+    safeName.replace(QLatin1Char('\\'), QLatin1Char('_'));
+    safeName.replace(QLatin1Char(':'), QLatin1Char('_'));
+
+    return QString("%1_%2_r%3").arg(safeName, report.groupId).arg(report.repetitionId);
+}
+
+QStringList CSVWriter::writeTruenessWithQCFilter(
+    const std::vector<BatchMetricReport>& reports,
+    const QString& outputDir,
+    const QStringList& errandScanIds,
+    const QString& allFilename,
+    const QString& filteredFilename)
+{
+    QStringList errors;
+
+    QDir dir(outputDir);
+    if (!dir.exists()) {
+        if (!dir.mkpath(".")) {
+            errors.append(QString("Cannot create output directory: %1").arg(outputDir));
+            return errors;
+        }
+    }
+
+    // Convert errand list to set for O(1) lookup
+    QSet<QString> errandSet(errandScanIds.begin(), errandScanIds.end());
+
+    // Write complete CSV (all reports)
+    QString allPath = dir.filePath(allFilename);
+    if (!writeTruenessCSV(reports, allPath)) {
+        errors.append(QString("Failed to write: %1").arg(allPath));
+    }
+
+    // Filter out errands and write filtered CSV
+    std::vector<BatchMetricReport> filtered;
+    filtered.reserve(reports.size());
+
+    for (const auto& report : reports) {
+        QString scanId = makeScanId(report);
+        if (!errandSet.contains(scanId)) {
+            filtered.push_back(report);
+        }
+    }
+
+    QString filteredPath = dir.filePath(filteredFilename);
+    if (!writeTruenessCSV(filtered, filteredPath)) {
+        errors.append(QString("Failed to write: %1").arg(filteredPath));
     }
 
     return errors;

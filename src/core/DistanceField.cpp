@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <iostream>
 
 namespace DistanceField {
 
@@ -17,6 +18,77 @@ using AABBTraits = CGAL::AABB_traits_3<Kernel, Primitive>;
 using AABBTree   = CGAL::AABB_tree<AABBTraits>;
 
 } // namespace
+
+// ─── ReferenceTree implementation ────────────────────────────────────────────
+
+class ReferenceTreeImpl {
+public:
+    explicit ReferenceTreeImpl(const SurfaceMesh& mesh)
+        : m_mesh(mesh)
+        , m_tree(faces(m_mesh).first, faces(m_mesh).second, m_mesh)
+    {
+        std::cout << "      Building AABB tree for reference ("
+                  << m_mesh.number_of_faces() << " triangles)..." << std::flush;
+        m_tree.accelerate_distance_queries();
+        std::cout << " done\n" << std::flush;
+    }
+
+    void computeDistances(ScanData& scan) const {
+        std::size_t nVerts = scan.mesh.num_vertices();
+        scan.distanceToRef.resize(nVerts);
+
+        for (auto v : scan.mesh.vertices()) {
+            const Point3& p = scan.mesh.point(v);
+            auto result = m_tree.closest_point_and_primitive(p);
+            const Point3& closestPt = result.first;
+            FaceDesc      primId    = result.second;
+
+            double dist = std::sqrt(CGAL::to_double(
+                CGAL::squared_distance(p, closestPt)));
+
+            // sign: dot(p - closestPt, face_normal)
+            auto hh = m_mesh.halfedge(primId);
+            const Point3& fp0 = m_mesh.point(m_mesh.source(hh));
+            const Point3& fp1 = m_mesh.point(m_mesh.target(hh));
+            const Point3& fp2 = m_mesh.point(m_mesh.target(m_mesh.next(hh)));
+            Vector3K fn = CGAL::cross_product(fp1 - fp0, fp2 - fp0);
+
+            Vector3K diff(p.x() - closestPt.x(),
+                          p.y() - closestPt.y(),
+                          p.z() - closestPt.z());
+            double dot = CGAL::to_double(diff * fn);
+            scan.distanceToRef[v.idx()] = (dot >= 0.0) ? dist : -dist;
+        }
+
+        scan.distanceComputed = true;
+    }
+
+    const SurfaceMesh& mesh() const { return m_mesh; }
+
+private:
+    const SurfaceMesh& m_mesh;
+    AABBTree m_tree;
+};
+
+ReferenceTree::ReferenceTree(const SurfaceMesh& referenceMesh)
+    : m_impl(std::make_unique<ReferenceTreeImpl>(referenceMesh))
+{
+}
+
+ReferenceTree::~ReferenceTree() = default;
+
+ReferenceTree::ReferenceTree(ReferenceTree&&) noexcept = default;
+ReferenceTree& ReferenceTree::operator=(ReferenceTree&&) noexcept = default;
+
+void ReferenceTree::computeDistances(ScanData& scan) const {
+    m_impl->computeDistances(scan);
+}
+
+const SurfaceMesh& ReferenceTree::mesh() const {
+    return m_impl->mesh();
+}
+
+// ─── Original compute function ───────────────────────────────────────────────
 
 void compute(ScanData& scan, const ScanData& reference)
 {

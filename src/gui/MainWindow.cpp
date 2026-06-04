@@ -4,7 +4,17 @@
 #include "../core/STLReader.h"
 #include "../core/CurvatureAnalysis.h"
 #include "../core/ToothSegmentation.h"
+#include "../core/DistanceField.h"
+#include "../qc/QCReviewWidget.h"
+#include "../qc/QCExporter.h"
+#include "../qc/ErrandResolutionDialog.h"
+#include "../qc/AlignmentQCDialog.h"
 #include <Eigen/Geometry>
+#include <QDir>
+#include <QProgressDialog>
+#include <QTimer>
+#include <QDebug>
+#include <algorithm>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -26,6 +36,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QSettings>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -35,15 +46,54 @@ MainWindow::MainWindow(QWidget* parent)
 
     setupUI();
     setupMenuBar();
+    loadSettings();
 
     m_statusLabel->setText("Ready. Load a study configuration to begin.");
 }
 
 MainWindow::~MainWindow()
 {
+    saveSettings();
     if (m_batchRunner && m_batchRunning) {
         m_batchRunner->cancel();
     }
+}
+
+void MainWindow::loadSettings()
+{
+    QSettings settings("DentScanComparePro", "DentScanComparePro");
+
+    // Block signals to avoid triggering saveSettings during load
+    QSignalBlocker b1(m_studyPathEdit);
+    QSignalBlocker b2(m_dataRootEdit);
+    QSignalBlocker b3(m_outputDirEdit);
+    QSignalBlocker b4(m_templatePathEdit);
+    QSignalBlocker b5(m_externalRefEdit);
+    QSignalBlocker b6(m_scansPreAlignedChk);
+
+    m_studyPathEdit->setText(settings.value("paths/studyFile").toString());
+    m_dataRootEdit->setText(settings.value("paths/dataRoot").toString());
+
+    QString outputDir = settings.value("paths/outputDir").toString();
+    if (!outputDir.isEmpty()) {
+        m_outputDirEdit->setText(outputDir);
+    }
+
+    m_externalRefEdit->setText(settings.value("paths/externalRef").toString());
+    m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
+
+    m_templatePathEdit->setText(settings.value("paths/templateScan").toString());
+}
+
+void MainWindow::saveSettings()
+{
+    QSettings settings("DentScanComparePro", "DentScanComparePro");
+    settings.setValue("paths/studyFile", m_studyPathEdit->text());
+    settings.setValue("paths/dataRoot", m_dataRootEdit->text());
+    settings.setValue("paths/outputDir", m_outputDirEdit->text());
+    settings.setValue("paths/externalRef", m_externalRefEdit->text());
+    settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
+    settings.setValue("paths/templateScan", m_templatePathEdit->text());
 }
 
 void MainWindow::setupUI()
@@ -67,6 +117,7 @@ void MainWindow::setupUI()
     setupROITab();
     setupBatchTab();
     setupResultsTab();
+    setupQCReviewTab();
 }
 
 void MainWindow::setupMenuBar()
@@ -115,6 +166,7 @@ void MainWindow::setupConfigTab()
     m_studyPathEdit->setPlaceholderText("Path to study.json configuration file");
     auto* browseStudyBtn = new QPushButton("Browse...");
     connect(browseStudyBtn, &QPushButton::clicked, this, &MainWindow::browseStudyFile);
+    connect(m_studyPathEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
     studyRow->addWidget(m_studyPathEdit, 1);
     studyRow->addWidget(browseStudyBtn);
     pathsLayout->addRow("Study Config:", studyRow);
@@ -125,6 +177,7 @@ void MainWindow::setupConfigTab()
     m_dataRootEdit->setPlaceholderText("Root directory containing scanner folders");
     auto* browseDataBtn = new QPushButton("Browse...");
     connect(browseDataBtn, &QPushButton::clicked, this, &MainWindow::browseDataRoot);
+    connect(m_dataRootEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
     dataRow->addWidget(m_dataRootEdit, 1);
     dataRow->addWidget(browseDataBtn);
     pathsLayout->addRow("Data Root:", dataRow);
@@ -135,9 +188,28 @@ void MainWindow::setupConfigTab()
     m_outputDirEdit->setText("./results");
     auto* browseOutputBtn = new QPushButton("Browse...");
     connect(browseOutputBtn, &QPushButton::clicked, this, &MainWindow::browseOutputDir);
+    connect(m_outputDirEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
     outputRow->addWidget(m_outputDirEdit, 1);
     outputRow->addWidget(browseOutputBtn);
     pathsLayout->addRow("Output Dir:", outputRow);
+
+    // External reference (optional)
+    auto* refRow = new QHBoxLayout();
+    m_externalRefEdit = new QLineEdit();
+    m_externalRefEdit->setPlaceholderText("Optional: external reference STL (CAD or lab scanner)");
+    auto* browseRefBtn = new QPushButton("Browse...");
+    connect(browseRefBtn, &QPushButton::clicked, this, &MainWindow::browseExternalRef);
+    connect(m_externalRefEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
+    refRow->addWidget(m_externalRefEdit, 1);
+    refRow->addWidget(browseRefBtn);
+    pathsLayout->addRow("External Ref:", refRow);
+
+    // Pre-aligned checkbox
+    m_scansPreAlignedChk = new QCheckBox("Scans are pre-aligned (from DentScanAlign)");
+    m_scansPreAlignedChk->setToolTip("Check this if scans were coarsely aligned via landmark registration.\n"
+                                      "This skips GPA computation but still runs ICP refinement against the reference.");
+    connect(m_scansPreAlignedChk, &QCheckBox::toggled, this, &MainWindow::saveSettings);
+    pathsLayout->addRow("", m_scansPreAlignedChk);
 
     // Load button
     auto* loadBtn = new QPushButton("Load Configuration");
@@ -606,6 +678,18 @@ void MainWindow::browseOutputDir()
 
     if (!path.isEmpty()) {
         m_outputDirEdit->setText(path);
+    }
+}
+
+void MainWindow::browseExternalRef()
+{
+    QString path = QFileDialog::getOpenFileName(this,
+        "Select External Reference STL",
+        QString(),
+        "STL Files (*.stl *.STL);;All Files (*)");
+
+    if (!path.isEmpty()) {
+        m_externalRefEdit->setText(path);
     }
 }
 
@@ -1087,11 +1171,28 @@ void MainWindow::runBatch()
         outputDir = "./results";
     }
 
+    // Get external reference settings from GUI
+    QString externalRef = m_externalRefEdit->text();
+    bool scansPreAligned = m_scansPreAlignedChk->isChecked();
+
     m_batchLog->clear();
     m_batchLog->append("Starting batch processing...");
     m_batchLog->append("Data root: " + dataRoot);
     m_batchLog->append("Output dir: " + outputDir);
+    if (!externalRef.isEmpty()) {
+        m_batchLog->append("External reference: " + externalRef);
+    }
+    if (scansPreAligned) {
+        m_batchLog->append("Scans pre-aligned: YES (skipping GPA, ICP refinement will run)");
+    }
     m_batchLog->append("");
+
+    // Update study config with GUI settings
+    m_studyConfig.externalReferencePath = externalRef;
+    m_studyConfig.scansPreAligned = scansPreAligned;
+    if (!externalRef.isEmpty()) {
+        m_studyConfig.referenceStrategy = "external";
+    }
 
     enableBatchControls(false);
     m_batchRunning = true;
@@ -1213,8 +1314,8 @@ void MainWindow::onSeedPicked(double x, double y, double z)
     allPoints.insert(allPoints.end(), m_seedPoints.begin(), m_seedPoints.end());
     m_roiMeshWidget->showPickSpheres(allPoints);
 
-    m_statusLabel->setText(QString("Seed point added at (%.2f, %.2f, %.2f). Total: %1")
-        .arg(x).arg(y).arg(z).arg(m_seedPoints.size()));
+    m_statusLabel->setText(QString("Seed point added at (%1, %2, %3). Total: %4")
+        .arg(x, 0, 'f', 2).arg(y, 0, 'f', 2).arg(z, 0, 'f', 2).arg(m_seedPoints.size()));
 }
 
 void MainWindow::runSegmentation()
@@ -1338,7 +1439,7 @@ void MainWindow::onOcclusPlanePicked(double x, double y, double z)
 
         m_occlusPlaneValid = true;
 
-        m_occlusPlaneStatusLabel->setText(QString("Plane: defined at Z=%.1f").arg(m_occlusPlaneOrigin.z()));
+        m_occlusPlaneStatusLabel->setText(QString("Plane: defined at Z=%1").arg(m_occlusPlaneOrigin.z(), 0, 'f', 1));
 
         // Exit pick mode
         m_pickOcclusPlaneBtn->setChecked(false);
@@ -1376,4 +1477,321 @@ void MainWindow::onBrushEditToothMaskToggled(bool active)
     } else {
         m_statusLabel->setText("Brush now creates ROI zones.");
     }
+}
+
+// === QC Review Tab ===
+
+void MainWindow::setupQCReviewTab()
+{
+    m_qcTab = new QWidget();
+    m_tabs->addTab(m_qcTab, "QC Review");
+
+    auto* layout = new QVBoxLayout(m_qcTab);
+
+    // Load QC button row
+    auto* loadRow = new QHBoxLayout();
+    auto* loadQCBtn = new QPushButton("Load QC Data from Results");
+    connect(loadQCBtn, &QPushButton::clicked, this, &MainWindow::loadQCData);
+    loadRow->addWidget(loadQCBtn);
+
+    auto* genImagesBtn = new QPushButton("Generate Difference Images");
+    genImagesBtn->setToolTip("Render difference images for all scans (requires loaded QC data)");
+    connect(genImagesBtn, &QPushButton::clicked, this, &MainWindow::generateDifferenceImages);
+    loadRow->addWidget(genImagesBtn);
+
+    loadRow->addStretch();
+    layout->addLayout(loadRow);
+
+    // QC Review widget
+    m_qcReviewWidget = new DentScanBatch::QCReviewWidget(this);
+
+    // Connect signals
+    connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::viewRequested,
+            this, &MainWindow::onQCViewRequested);
+    connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::reregisterRequested,
+            this, &MainWindow::onQCReregisterRequested);
+    connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::statusChanged,
+            this, &MainWindow::onQCStatusChanged);
+    connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::saveRequested,
+            this, &MainWindow::onQCSaveRequested);
+
+    layout->addWidget(m_qcReviewWidget, 1);
+}
+
+void MainWindow::loadQCData()
+{
+    QString outputDir = m_outputDirEdit->text();
+    if (outputDir.isEmpty()) {
+        outputDir = "./results";
+    }
+
+    if (!m_qcReviewWidget->loadFromDirectory(outputDir)) {
+        QMessageBox::warning(this, "Load Error",
+            "Failed to load QC data. Make sure batch processing has completed\n"
+            "and QC data was exported to the qc/ subdirectory.");
+        return;
+    }
+
+    m_statusLabel->setText("QC data loaded from " + outputDir);
+}
+
+void MainWindow::onQCViewRequested(const QString& scanId, const QString& imagePath)
+{
+    Q_UNUSED(imagePath);
+
+    QString outputDir = m_outputDirEdit->text();
+    if (outputDir.isEmpty()) {
+        outputDir = "./results";
+    }
+
+    // Get the scan record
+    auto record = m_qcReviewWidget->errandManager().getRecord(scanId);
+    if (record.scanId.isEmpty() || record.filePath.isEmpty()) {
+        QMessageBox::warning(this, "Error", "Could not find scan record for: " + scanId);
+        return;
+    }
+
+    // Find GPA mean for this group
+    QString gpaMeanPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+    if (!QFile::exists(gpaMeanPath)) {
+        QMessageBox::warning(this, "Error",
+            QString("GPA mean not found: %1").arg(gpaMeanPath));
+        return;
+    }
+
+    // Find transform JSON for this scan
+    QString transformPath = outputDir + "/qc/transforms/" + scanId + ".json";
+
+    // Open AlignmentQCDialog
+    DentScanBatch::AlignmentQCDialog dialog(
+        record.filePath, gpaMeanPath, scanId, this);
+
+    // Load meshes with transform
+    if (!dialog.loadMeshes(transformPath)) {
+        return;
+    }
+
+    int result = dialog.exec();
+
+    // Process events to allow VTK cleanup
+    for (int i = 0; i < 3; ++i) {
+        QApplication::processEvents();
+    }
+
+    if (result == QDialog::Accepted) {
+        if (dialog.wasAccepted()) {
+            m_qcReviewWidget->errandManager().setStatus(scanId, DentScanBatch::QCStatus::Accepted);
+            m_statusLabel->setText(QString("Scan %1 accepted").arg(scanId));
+        } else if (dialog.wasFlagged()) {
+            m_qcReviewWidget->errandManager().setStatus(scanId, DentScanBatch::QCStatus::Errand);
+            m_statusLabel->setText(QString("Scan %1 flagged as errand").arg(scanId));
+        }
+
+        // Refresh QC review
+        QTimer::singleShot(100, this, [this]() {
+            m_qcReviewWidget->refresh();
+        });
+    }
+}
+
+void MainWindow::onQCReregisterRequested(const QString& scanId)
+{
+    QString outputDir = m_outputDirEdit->text();
+    if (outputDir.isEmpty()) {
+        outputDir = "./results";
+    }
+
+    // Get the scan record
+    auto record = m_qcReviewWidget->errandManager().getRecord(scanId);
+    if (record.scanId.isEmpty()) {
+        QMessageBox::warning(this, "Error", "Could not find scan record for: " + scanId);
+        return;
+    }
+
+    // Find GPA mean for this group
+    QString gpaMeanPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+
+    // Open errand resolution dialog
+    qDebug() << "Creating ErrandResolutionDialog...";
+    DentScanBatch::ErrandResolutionDialog dialog(
+        record.filePath, gpaMeanPath, scanId, this);
+
+    qDebug() << "Calling dialog.exec()...";
+    int result = dialog.exec();
+    qDebug() << "dialog.exec() returned:" << result;
+
+    // Process events multiple times to allow VTK cleanup from dialog destruction
+    for (int i = 0; i < 3; ++i) {
+        QApplication::processEvents();
+    }
+
+    if (result == QDialog::Accepted && dialog.wasAccepted()) {
+        qDebug() << "Dialog accepted, updating errand manager...";
+        // Update errand manager with corrected metrics
+        m_qcReviewWidget->errandManager().markResolved(
+            scanId, dialog.newRMS(), "landmark");
+
+        // Store values for deferred refresh
+        double newRMS = dialog.newRMS();
+        QString sid = scanId;
+
+        qDebug() << "Deferring QC review refresh...";
+        // Defer the refresh to allow VTK to fully cleanup
+        QTimer::singleShot(100, this, [this, sid, newRMS]() {
+            qDebug() << "Refreshing QC review (deferred)...";
+            m_qcReviewWidget->refresh();
+            m_statusLabel->setText(QString("Scan %1 re-registered. New RMS: %2 mm")
+                .arg(sid).arg(newRMS, 0, 'f', 3));
+            qDebug() << "Refresh complete";
+        });
+    }
+    qDebug() << "onQCReregisterRequested() complete";
+}
+
+void MainWindow::onQCStatusChanged()
+{
+    m_statusLabel->setText("QC status changed. Remember to save.");
+}
+
+void MainWindow::onQCSaveRequested()
+{
+    m_statusLabel->setText("QC status saved.");
+}
+
+void MainWindow::generateDifferenceImages()
+{
+    QString outputDir = m_outputDirEdit->text();
+    if (outputDir.isEmpty()) {
+        outputDir = "./results";
+    }
+
+    QDir transformDir(outputDir + "/qc/transforms");
+    if (!transformDir.exists()) {
+        QMessageBox::warning(this, "No QC Data",
+            "No transforms found. Run batch processing first, then load QC data.");
+        return;
+    }
+
+    QDir gpaMeansDir(outputDir + "/qc/gpa_means");
+    if (!gpaMeansDir.exists()) {
+        QMessageBox::warning(this, "No GPA Means",
+            "No GPA mean meshes found. Run batch processing first.");
+        return;
+    }
+
+    // Get list of transform files
+    QStringList jsonFiles = transformDir.entryList(QStringList() << "*.json", QDir::Files);
+    if (jsonFiles.isEmpty()) {
+        QMessageBox::warning(this, "No Transforms", "No transform files found.");
+        return;
+    }
+
+    // Enable image export (was disabled in batch mode)
+    DentScanBatch::QCExporter::setImageExportEnabled(true);
+
+    // Progress dialog
+    QProgressDialog progress("Generating difference images...", "Cancel", 0, jsonFiles.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+
+    int generated = 0;
+    int skipped = 0;
+
+    // Cache for loaded GPA means
+    std::map<QString, std::shared_ptr<ScanData>> gpaMeanCache;
+
+    for (int i = 0; i < jsonFiles.size(); ++i) {
+        if (progress.wasCanceled()) break;
+
+        QString jsonFile = jsonFiles[i];
+        QString scanId = jsonFile;
+        scanId.chop(5);  // Remove .json
+
+        progress.setValue(i);
+        progress.setLabelText(QString("Processing %1 (%2/%3)")
+            .arg(scanId).arg(i + 1).arg(jsonFiles.size()));
+        QApplication::processEvents();
+
+        // Check if image already exists
+        QString imagePath = outputDir + "/qc/difference_images/" + scanId + ".png";
+        if (QFile::exists(imagePath)) {
+            skipped++;
+            continue;
+        }
+
+        // Load transform JSON
+        QString jsonPath = transformDir.absoluteFilePath(jsonFile);
+        QFile file(jsonPath);
+        if (!file.open(QIODevice::ReadOnly)) continue;
+
+        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        if (!doc.isObject()) continue;
+
+        QJsonObject obj = doc.object();
+        QString filePath = obj["file_path"].toString();
+        QString groupId = obj["group"].toString();
+
+        if (filePath.isEmpty() || groupId.isEmpty()) continue;
+
+        // Load original STL
+        std::string errorMsg;
+        auto scanData = STLReader::read(filePath.toStdString(), errorMsg);
+        if (!scanData) {
+            continue;
+        }
+
+        // Load transform matrix
+        QJsonArray transformArray = obj["transform"].toArray();
+        Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+        for (int r = 0; r < 4 && r < transformArray.size(); ++r) {
+            QJsonArray row = transformArray[r].toArray();
+            for (int c = 0; c < 4 && c < row.size(); ++c) {
+                transform(r, c) = row[c].toDouble();
+            }
+        }
+
+        // Apply transform to mesh vertices
+        for (auto v : scanData->mesh.vertices()) {
+            Point3& p = scanData->mesh.point(v);
+            Eigen::Vector4d pt(p.x(), p.y(), p.z(), 1.0);
+            Eigen::Vector4d transformed = transform * pt;
+            p = Point3(transformed.x(), transformed.y(), transformed.z());
+        }
+
+        // Load GPA mean (cached)
+        QString gpaMeanPath = gpaMeansDir.absoluteFilePath(groupId + "_gpa_mean.stl");
+        std::shared_ptr<ScanData> gpaMean;
+
+        auto cacheIt = gpaMeanCache.find(groupId);
+        if (cacheIt != gpaMeanCache.end()) {
+            gpaMean = cacheIt->second;
+        } else {
+            gpaMean = STLReader::read(gpaMeanPath.toStdString(), errorMsg);
+            if (!gpaMean) {
+                continue;
+            }
+            gpaMeanCache[groupId] = gpaMean;
+        }
+
+        // Compute distances
+        DistanceField::compute(*scanData, *gpaMean);
+
+        // Export difference image
+        if (DentScanBatch::QCExporter::exportDifferenceImage(
+                scanData, outputDir, scanId, -0.5, 0.5)) {
+            generated++;
+        }
+    }
+
+    progress.setValue(jsonFiles.size());
+
+    // Refresh QC review widget
+    m_qcReviewWidget->refresh();
+
+    m_statusLabel->setText(QString("Generated %1 images, skipped %2 (already exist)")
+        .arg(generated).arg(skipped));
+
+    QMessageBox::information(this, "Complete",
+        QString("Generated %1 difference images.\nSkipped %2 (already exist).")
+        .arg(generated).arg(skipped));
 }

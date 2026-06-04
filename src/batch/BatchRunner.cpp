@@ -1,4 +1,6 @@
 #include "BatchRunner.h"
+#include "../qc/QCExporter.h"
+#include "../core/AlignmentTransformLoader.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -115,6 +117,26 @@ bool BatchRunner::run(
     m_warnings.clear();
     m_errors.clear();
     m_results.clear();
+
+    // Disable image export in batch mode (VTK offscreen rendering often fails)
+    // GPA meshes (STL) and transforms (JSON) will still be exported
+    QCExporter::setImageExportEnabled(false);
+    if (m_verbose) {
+        std::cout << "Note: Difference image export disabled in batch mode.\n" << std::flush;
+    }
+
+    // Load precomputed transforms from DentScanAlign (if directory specified)
+    std::map<std::string, Eigen::Matrix4d> precomputedTransforms;
+    if (!config.alignmentsDirectory.isEmpty()) {
+        if (m_verbose) {
+            std::cout << "Loading precomputed transforms from: "
+                      << config.alignmentsDirectory.toStdString() << "...\n" << std::flush;
+        }
+        precomputedTransforms = AlignmentTransformLoader::loadTransforms(config.alignmentsDirectory);
+        if (m_verbose && !precomputedTransforms.empty()) {
+            std::cout << "  Loaded " << precomputedTransforms.size() << " transforms\n" << std::flush;
+        }
+    }
 
     // Check for existing progress (resume support)
     QSet<QString> completedGroups;
@@ -242,8 +264,11 @@ bool BatchRunner::run(
             }
         }
 
-        // Process the group
-        GroupResult result = processor.process(group, files, config.alignment, roiTemplate);
+        // Process the group (with QC export to outputDir)
+        GroupResult result = processor.process(
+            group, files, config.alignment, roiTemplate, outputDir,
+            config.externalReferencePath, config.scansPreAligned,
+            precomputedTransforms);
 
         // Collect warnings and errors
         m_warnings.append(result.warnings);

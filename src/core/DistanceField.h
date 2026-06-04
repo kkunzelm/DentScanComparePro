@@ -3,8 +3,12 @@
 #include "Mesh.h"
 #include "MetricReport.h"
 #include <Eigen/Core>
+#include <memory>
 
 namespace DistanceField {
+
+// Forward declaration for PIMPL
+class ReferenceTreeImpl;
 
 // Defines a fitted occlusal plane with asymmetric offsets.
 // After the user picks ≥3 cusp points, a least-squares plane is fitted.
@@ -18,9 +22,41 @@ struct OcclusalPlane {
     bool   active  = false;
 };
 
+/**
+ * Pre-built AABB tree for efficient distance queries against a reference mesh.
+ * Use this when computing distances from multiple scans to the same reference.
+ * Building the tree once and reusing it is much faster for large reference meshes.
+ */
+class ReferenceTree {
+public:
+    explicit ReferenceTree(const SurfaceMesh& referenceMesh);
+    ~ReferenceTree();
+
+    // Non-copyable but movable
+    ReferenceTree(const ReferenceTree&) = delete;
+    ReferenceTree& operator=(const ReferenceTree&) = delete;
+    ReferenceTree(ReferenceTree&&) noexcept;
+    ReferenceTree& operator=(ReferenceTree&&) noexcept;
+
+    /**
+     * Compute signed distances from scan vertices to this reference.
+     * Results stored in scan->distanceToRef.
+     */
+    void computeDistances(ScanData& scan) const;
+
+    /**
+     * Get the reference mesh (for normal computation).
+     */
+    const SurfaceMesh& mesh() const;
+
+private:
+    std::unique_ptr<ReferenceTreeImpl> m_impl;
+};
+
 // Computes per-vertex signed distance from each scan to the GPA reference.
 // Sign: positive = scan vertex is on the outer side of the reference normal.
 // Stores results in scan->distanceToRef and sets scan->distanceComputed = true.
+// Note: For multiple scans against the same reference, use ReferenceTree instead.
 void compute(ScanData& scan, const ScanData& reference);
 
 // Compute distances between two meshes without modifying either.

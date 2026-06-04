@@ -103,6 +103,30 @@ public:
         const QString& precisionFilename,
         int& currentObsId);
 
+    /**
+     * Write trueness CSVs with QC filtering.
+     * Writes both trueness_metrics_all.csv (complete) and trueness_metrics.csv (errands excluded).
+     * @param reports All trueness reports
+     * @param outputDir Output directory
+     * @param errandScanIds Set of scan IDs to exclude from filtered CSV
+     * @param allFilename Name for complete CSV (default: trueness_metrics_all.csv)
+     * @param filteredFilename Name for filtered CSV (default: trueness_metrics.csv)
+     * @return List of errors (empty if successful)
+     */
+    static QStringList writeTruenessWithQCFilter(
+        const std::vector<BatchMetricReport>& reports,
+        const QString& outputDir,
+        const QStringList& errandScanIds,
+        const QString& allFilename = "trueness_metrics_all.csv",
+        const QString& filteredFilename = "trueness_metrics.csv");
+
+    /**
+     * Generate scan ID from a report (for QC matching).
+     * @param report Metric report
+     * @return Scan ID in format "Scanner_SKDXX_rN"
+     */
+    static QString makeScanId(const BatchMetricReport& report);
+
 private:
     // Write UTF-8 BOM for Windows Excel compatibility
     static void writeBOM(QFile& file);
