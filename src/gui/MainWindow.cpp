@@ -71,6 +71,8 @@ void MainWindow::loadSettings()
     QSignalBlocker b5(m_externalRefEdit);
     QSignalBlocker b6(m_scansPreAlignedChk);
     QSignalBlocker b7(m_roiTemplateEdit);
+    QSignalBlocker b8(m_useMaskedICPChk);
+    QSignalBlocker b9(m_maskedOutputDirEdit);
 
     m_studyPathEdit->setText(settings.value("paths/studyFile").toString());
     m_dataRootEdit->setText(settings.value("paths/dataRoot").toString());
@@ -80,9 +82,11 @@ void MainWindow::loadSettings()
         m_outputDirEdit->setText(outputDir);
     }
 
+    m_maskedOutputDirEdit->setText(settings.value("paths/maskedOutputDir").toString());
     m_externalRefEdit->setText(settings.value("paths/externalRef").toString());
     m_roiTemplateEdit->setText(settings.value("paths/roiTemplate").toString());
     m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
+    m_useMaskedICPChk->setChecked(settings.value("options/useMaskedICP", true).toBool());
 
     m_templatePathEdit->setText(settings.value("paths/templateScan").toString());
 }
@@ -93,9 +97,11 @@ void MainWindow::saveSettings()
     settings.setValue("paths/studyFile", m_studyPathEdit->text());
     settings.setValue("paths/dataRoot", m_dataRootEdit->text());
     settings.setValue("paths/outputDir", m_outputDirEdit->text());
+    settings.setValue("paths/maskedOutputDir", m_maskedOutputDirEdit->text());
     settings.setValue("paths/externalRef", m_externalRefEdit->text());
     settings.setValue("paths/roiTemplate", m_roiTemplateEdit->text());
     settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
+    settings.setValue("options/useMaskedICP", m_useMaskedICPChk->isChecked());
     settings.setValue("paths/templateScan", m_templatePathEdit->text());
 }
 
@@ -201,6 +207,17 @@ void MainWindow::setupConfigTab()
     outputRow->addWidget(m_outputDirEdit, 1);
     outputRow->addWidget(browseOutputBtn);
     pathsLayout->addRow("Output Dir:", outputRow);
+
+    // Masked ICP output directory (optional)
+    auto* maskedOutputRow = new QHBoxLayout();
+    m_maskedOutputDirEdit = new QLineEdit();
+    m_maskedOutputDirEdit->setPlaceholderText("Optional: separate output for masked ICP (uses Output Dir if empty)");
+    auto* browseMaskedOutputBtn = new QPushButton("Browse...");
+    connect(browseMaskedOutputBtn, &QPushButton::clicked, this, &MainWindow::browseMaskedOutputDir);
+    connect(m_maskedOutputDirEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
+    maskedOutputRow->addWidget(m_maskedOutputDirEdit, 1);
+    maskedOutputRow->addWidget(browseMaskedOutputBtn);
+    pathsLayout->addRow("Masked ICP Output:", maskedOutputRow);
 
     // External reference (optional)
     auto* refRow = new QHBoxLayout();
@@ -594,6 +611,21 @@ void MainWindow::setupBatchTab()
     controlRow->addStretch();
     layout->addLayout(controlRow);
 
+    // Options
+    auto* optionsGroup = new QGroupBox("Registration Options");
+    auto* optionsLayout = new QVBoxLayout(optionsGroup);
+
+    m_useMaskedICPChk = new QCheckBox("Use ROI mask for registration (masked ICP)");
+    m_useMaskedICPChk->setToolTip(
+        "When checked, ICP alignment focuses on tooth surfaces only.\n"
+        "Requires an ROI template with tooth segmentation seeds.\n"
+        "When unchecked, full-mesh ICP is used.");
+    m_useMaskedICPChk->setChecked(true);
+    connect(m_useMaskedICPChk, &QCheckBox::toggled, this, &MainWindow::saveSettings);
+    optionsLayout->addWidget(m_useMaskedICPChk);
+
+    layout->addWidget(optionsGroup);
+
     // Progress bars
     auto* progressGroup = new QGroupBox("Progress");
     auto* progressLayout = new QFormLayout(progressGroup);
@@ -703,6 +735,18 @@ void MainWindow::browseOutputDir()
 
     if (!path.isEmpty()) {
         m_outputDirEdit->setText(path);
+    }
+}
+
+void MainWindow::browseMaskedOutputDir()
+{
+    QString path = QFileDialog::getExistingDirectory(this,
+        "Select Masked ICP Output Directory",
+        QString(),
+        QFileDialog::ShowDirsOnly);
+
+    if (!path.isEmpty()) {
+        m_maskedOutputDirEdit->setText(path);
     }
 }
 
@@ -1208,6 +1252,8 @@ void MainWindow::runBatch()
 
     QString dataRoot = m_dataRootEdit->text();
     QString outputDir = m_outputDirEdit->text();
+    QString maskedOutputDir = m_maskedOutputDirEdit->text().trimmed();
+    bool useMaskedICP = m_useMaskedICPChk->isChecked();
 
     if (dataRoot.isEmpty()) {
         QMessageBox::warning(this, "Error", "Please specify the data root directory.");
@@ -1216,6 +1262,11 @@ void MainWindow::runBatch()
 
     if (outputDir.isEmpty()) {
         outputDir = "./results";
+    }
+
+    // Use masked output directory if masked ICP is enabled and directory is specified
+    if (useMaskedICP && !maskedOutputDir.isEmpty()) {
+        outputDir = maskedOutputDir;
     }
 
     // Get external reference settings from GUI
@@ -1227,6 +1278,9 @@ void MainWindow::runBatch()
     m_batchLog->append("Starting batch processing...");
     m_batchLog->append("Data root: " + dataRoot);
     m_batchLog->append("Output dir: " + outputDir);
+    if (useMaskedICP && !maskedOutputDir.isEmpty()) {
+        m_batchLog->append("(Using Masked ICP Output directory)");
+    }
     if (!externalRef.isEmpty()) {
         m_batchLog->append("External reference: " + externalRef);
     }
@@ -1254,11 +1308,25 @@ void MainWindow::runBatch()
         try {
             roiTemplate = DentScanBatch::ROITemplate::loadFromFile(roiTemplatePath);
             m_batchLog->append("ROI template loaded successfully");
+
+            // Control masked ICP via checkbox
+            if (!useMaskedICP) {
+                roiTemplate->useToothMask = false;
+                m_batchLog->append("Masked ICP: DISABLED (using full-mesh ICP)");
+            } else if (!roiTemplate->toothSeeds.empty()) {
+                roiTemplate->useToothMask = true;
+                m_batchLog->append(QString("Masked ICP: ENABLED (%1 tooth seeds)")
+                    .arg(roiTemplate->toothSeeds.size()));
+            } else {
+                m_batchLog->append("Masked ICP: No tooth seeds in template, using full-mesh ICP");
+            }
         } catch (const std::exception& e) {
             QMessageBox::warning(this, "ROI Template Error",
                 QString("Failed to load ROI template:\n%1\n\nContinuing without ROI template.")
                 .arg(e.what()));
         }
+    } else if (useMaskedICP) {
+        m_batchLog->append("Masked ICP: No ROI template specified, using full-mesh ICP");
     }
 
     // Create batch runner

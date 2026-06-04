@@ -46,6 +46,7 @@ private slots:
     void browseStudyFile();
     void browseDataRoot();
     void browseOutputDir();
+    void browseMaskedOutputDir();
     void browseExternalRef();
     void browseROITemplate();
     void loadStudyConfig();
@@ -149,6 +150,7 @@ private:
     QLineEdit* m_studyPathEdit = nullptr;
     QLineEdit* m_dataRootEdit = nullptr;
     QLineEdit* m_outputDirEdit = nullptr;
+    QLineEdit* m_maskedOutputDirEdit = nullptr;
     QLineEdit* m_externalRefEdit = nullptr;
     QLineEdit* m_roiTemplateEdit = nullptr;
     class QCheckBox* m_scansPreAlignedChk = nullptr;
@@ -206,6 +208,7 @@ private:
     QWidget* m_batchTab = nullptr;
     QPushButton* m_runBatchBtn = nullptr;
     QPushButton* m_cancelBatchBtn = nullptr;
+    class QCheckBox* m_useMaskedICPChk = nullptr;
     QProgressBar* m_overallProgress = nullptr;
     QProgressBar* m_groupProgress = nullptr;
     QLabel* m_currentGroupLabel = nullptr;

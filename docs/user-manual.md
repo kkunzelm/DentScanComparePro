@@ -108,13 +108,26 @@ The ROI template defines which region of the scan to analyze. This is especially
 2. Set paths:
    - **Study Config**: Path to your study.json
    - **Data Root**: Directory containing scanner folders
-   - **Output Dir**: Where to save results
+   - **Output Dir**: Where to save results (used for full-mesh ICP)
+   - **Masked ICP Output** (optional): Separate output directory for masked ICP results
    - **External Ref** (optional): CAD or lab scanner reference STL
    - **ROI Template** (optional): JSON file from ROI Template Editor (enables masked ICP and ROI-based metrics)
 3. Check **Scans are pre-aligned** if using DentScanAlign output
 4. Click **Load Configuration** to verify
 5. Go to **Batch Processing** tab
-6. Click **Run Batch Processing**
+6. Configure **Registration Options**:
+   - **Use ROI mask for registration**: Check to use masked ICP (tooth surfaces only), uncheck for full-mesh ICP
+7. Click **Run Batch Processing**
+
+**Registration Options Explained:**
+
+| Checkbox State | ROI Template | Alignment Method | Output Directory |
+|----------------|--------------|------------------|------------------|
+| Checked | With tooth seeds | Masked ICP (tooth surfaces) | Masked ICP Output (if set) or Output Dir |
+| Checked | No seeds/template | Full-mesh ICP | Output Dir |
+| Unchecked | Any | Full-mesh ICP | Output Dir |
+
+Note: Even when masked ICP is disabled, the ROI template is still used to filter which vertices are included in metric calculations (RMS, precision, etc.).
 
 **CLI Mode:**
 ```bash

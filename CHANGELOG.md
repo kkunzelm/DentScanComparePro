@@ -6,6 +6,10 @@ All notable changes to DentScanComparePro are documented in this file.
 
 ### Added
 - **ROI Template field in Study Configuration**: New "ROI Template" path field allows specifying a JSON template file for batch processing. The template is used for masked ICP alignment and ROI-based metric computation.
+- **Masked ICP Output directory**: New optional "Masked ICP Output" path field in Study Configuration. When masked ICP is enabled and this path is specified, results are saved to this separate directory instead of the main Output Dir.
+- **"Use ROI mask for registration" checkbox**: New checkbox in Batch Processing tab under "Registration Options" controls whether masked ICP is used:
+  - **Checked**: ICP alignment focuses on tooth surfaces only (requires ROI template with tooth seeds)
+  - **Unchecked**: Full-mesh ICP is used, but ROI is still applied for metric computation
 - **About dialog**: Help menu now includes "About DentScanComparePro" with author information (Prof. Dr. Karl-Heinz Kunzelmann) and clickable link to [www.kunzelmann.de](https://www.kunzelmann.de).
 - **Editable template path**: The template scan path in ROI Template Editor is now editable. You can type/paste a path directly, press Enter or click Load, or use Browse.
 
