@@ -167,6 +167,16 @@ private:
                                      const ROIConfig& roi,
                                      double z_occlusal) const;
 
+    // Compute combined ICP mask from all active ROI components
+    // Returns mask combining: bbox, plane slab, brush zones, and optionally tooth mask
+    std::vector<bool> computeCombinedICPMask(
+        const ScanData& scan,
+        const ROIConfig& roi,
+        const std::vector<bool>& toothMask) const;
+
+    // Check if any ROI component is active (for deciding whether to use masked ICP)
+    bool hasActiveROI(const ROIConfig& roi, bool hasToothMask) const;
+
     // Compute tooth masks for all scans using template seeds
     std::vector<std::vector<bool>> computeToothMasks(
         const std::vector<std::shared_ptr<ScanData>>& scans,

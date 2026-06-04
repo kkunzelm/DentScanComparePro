@@ -116,16 +116,27 @@ The ROI template defines which region of the scan to analyze. This is especially
 4. Click **Load Configuration** to verify
 5. Go to **Batch Processing** tab
 6. Configure **Registration Options**:
-   - **Use ROI mask for registration**: Check to use masked ICP (tooth surfaces only), uncheck for full-mesh ICP
+   - **Use ROI mask for registration**: Check to use masked ICP (ROI region only), uncheck for full-mesh ICP
 7. Click **Run Batch Processing**
 
 **Registration Options Explained:**
 
-| Checkbox State | ROI Template | Alignment Method | Output Directory |
-|----------------|--------------|------------------|------------------|
-| Checked | With tooth seeds | Masked ICP (tooth surfaces) | Masked ICP Output (if set) or Output Dir |
-| Checked | No seeds/template | Full-mesh ICP | Output Dir |
-| Unchecked | Any | Full-mesh ICP | Output Dir |
+Masked ICP uses **all active ROI components** combined with AND logic:
+
+| Component | Active Toggle | Effect on Masked ICP |
+|-----------|--------------|---------------------|
+| Bounding Box | "Active" checkbox | Only vertices inside box used for alignment |
+| Plane Slab | "Active" checkbox | Only vertices in slab used for alignment |
+| Brush zones | (always if present) | Include/exclude specific regions |
+| Tooth mask | "Use tooth mask as ROI" | Only tooth crown vertices used |
+
+**Output Directory Selection:**
+
+| Masked ICP Checkbox | Masked ICP Output Dir | Result |
+|---------------------|----------------------|--------|
+| Checked | Specified | Results saved to Masked ICP Output |
+| Checked | Empty | Results saved to Output Dir |
+| Unchecked | Any | Results saved to Output Dir |
 
 Note: Even when masked ICP is disabled, the ROI template is still used to filter which vertices are included in metric calculations (RMS, precision, etc.).
 

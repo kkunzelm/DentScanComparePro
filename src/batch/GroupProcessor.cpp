@@ -130,10 +130,19 @@ GroupResult GroupProcessor::process(
         // Run ICP alignment against external reference
         emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement against reference");
 
-        // Use masked ICP if tooth masks are available
-        bool useMaskedICP = !toothMasks.empty();
+        // Get effective ROI configuration
+        const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
+        bool hasToothMask = !toothMasks.empty();
+
+        // Use masked ICP if any ROI component is active
+        bool useMaskedICP = hasActiveROI(effectiveROI, hasToothMask);
         if (useMaskedICP) {
-            std::cout << "    Running MASKED ICP refinement against reference..." << std::flush;
+            std::cout << "    Running MASKED ICP refinement against reference";
+            if (effectiveROI.bbox.active) std::cout << " [bbox]";
+            if (effectiveROI.zPlane.active) std::cout << " [plane]";
+            if (!effectiveROI.brushZones.empty()) std::cout << " [brush]";
+            if (hasToothMask) std::cout << " [teeth]";
+            std::cout << "..." << std::flush;
         } else {
             std::cout << "    Running ICP refinement against reference..." << std::flush;
         }
@@ -156,9 +165,13 @@ GroupResult GroupProcessor::process(
             std::cout << "." << std::flush;
 
             ICPRegistration::Result icpResult;
-            if (useMaskedICP && i < toothMasks.size() && !toothMasks[i].empty()) {
-                // Use masked ICP - focuses alignment on tooth surfaces
-                icpResult = ICPRegistration::alignMasked(*scan, refData, toothMasks[i], icpParams);
+            if (useMaskedICP) {
+                // Compute combined ROI mask for this scan
+                const std::vector<bool>& toothMask = (i < toothMasks.size()) ? toothMasks[i] : std::vector<bool>();
+                std::vector<bool> combinedMask = computeCombinedICPMask(*scan, effectiveROI, toothMask);
+
+                // Use masked ICP with combined ROI mask
+                icpResult = ICPRegistration::alignMasked(*scan, refData, combinedMask, icpParams);
             } else {
                 // Fall back to full-mesh ICP
                 icpResult = ICPRegistration::align(*scan, refData, icpParams);
@@ -395,6 +408,65 @@ std::vector<bool> GroupProcessor::computeROIMask(
         const Point3& p = scan.mesh.point(v);
         mask[idx] = roi.isInROI(p.x(), p.y(), p.z(), z_occlusal);
         idx++;
+    }
+
+    return mask;
+}
+
+bool GroupProcessor::hasActiveROI(const ROIConfig& roi, bool hasToothMask) const
+{
+    // Check if any ROI component is active
+    return roi.bbox.active || roi.zPlane.active || !roi.brushZones.empty() || hasToothMask;
+}
+
+std::vector<bool> GroupProcessor::computeCombinedICPMask(
+    const ScanData& scan,
+    const ROIConfig& roi,
+    const std::vector<bool>& toothMask) const
+{
+    std::size_t numVertices = scan.mesh.number_of_vertices();
+    std::vector<bool> mask(numVertices, true);  // Start with all included
+
+    // Compute occlusal Z for plane slab
+    double z_occlusal = computeOcclusalZ(scan.mesh);
+
+    std::size_t idx = 0;
+    for (auto v : scan.mesh.vertices()) {
+        const Point3& p = scan.mesh.point(v);
+
+        // Apply bounding box (if active)
+        if (roi.bbox.active) {
+            if (!roi.bbox.contains(p.x(), p.y(), p.z())) {
+                mask[idx] = false;
+                idx++;
+                continue;
+            }
+        }
+
+        // Apply plane slab (if active)
+        if (roi.zPlane.active) {
+            if (!roi.zPlane.contains(p.z(), z_occlusal)) {
+                mask[idx] = false;
+                idx++;
+                continue;
+            }
+        }
+
+        // Apply brush zones (override previous decisions)
+        for (const auto& zone : roi.brushZones) {
+            if (zone.contains(p.x(), p.y(), p.z())) {
+                mask[idx] = zone.include;
+            }
+        }
+
+        idx++;
+    }
+
+    // Apply tooth mask (AND with existing mask)
+    if (!toothMask.empty() && toothMask.size() == numVertices) {
+        for (std::size_t i = 0; i < numVertices; i++) {
+            mask[i] = mask[i] && toothMask[i];
+        }
     }
 
     return mask;

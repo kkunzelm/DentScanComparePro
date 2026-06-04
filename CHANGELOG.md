@@ -14,6 +14,13 @@ All notable changes to DentScanComparePro are documented in this file.
 - **Editable template path**: The template scan path in ROI Template Editor is now editable. You can type/paste a path directly, press Enter or click Load, or use Browse.
 
 ### Changed
+- **Masked ICP now uses combined ROI**: When "Use ROI mask for registration" is enabled, masked ICP uses all active ROI components combined with AND logic:
+  - Bounding Box (if Active)
+  - Plane Slab (if Active)
+  - Brush zones (if any defined)
+  - Tooth mask (if "Use tooth mask as ROI" checked)
+  - Previously, masked ICP only worked with tooth seeds
+- **ROI Template Editor layout**: Right panel now uses a scroll area for better vertical space management, with increased width (380-420px) for font readability
 - **Window title**: Now includes author attribution: "DentScanComparePro - Scanner Accuracy Evaluation (Prof. K.-H. Kunzelmann)"
 - **Plane Slab UI labels**:
   - Group box renamed from "Z-Plane Slab (Occlusal Region)" to "Plane Slab (ROI Height)"

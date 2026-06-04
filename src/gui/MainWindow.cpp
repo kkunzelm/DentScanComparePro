@@ -23,6 +23,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QTreeWidget>
@@ -318,10 +319,16 @@ void MainWindow::setupROITab()
 
     layout->addWidget(leftPanel, 1);
 
-    // Right side: ROI controls
+    // Right side: ROI controls (in scroll area for vertical overflow)
+    auto* scrollArea = new QScrollArea();
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setMinimumWidth(380);
+    scrollArea->setMaximumWidth(420);
+
     auto* rightPanel = new QWidget();
-    rightPanel->setMaximumWidth(350);
     auto* rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setSpacing(8);
 
     // Bounding Box group
     auto* bboxGroup = new QGroupBox("Bounding Box");
@@ -586,7 +593,10 @@ void MainWindow::setupROITab()
     rightLayout->addWidget(ioGroup);
 
     rightLayout->addStretch();
-    layout->addWidget(rightPanel);
+
+    // Set the scroll area content
+    scrollArea->setWidget(rightPanel);
+    layout->addWidget(scrollArea);
 }
 
 void MainWindow::setupBatchTab()
