@@ -65,6 +65,7 @@ private slots:
     void onSeedPickModeToggled(bool active);
     void onSeedPicked(double x, double y, double z);
     void runSegmentation();
+    void runSegmentationAuto();  // Auto-runs after each seed change
     void clearSeeds();
     void undoLastSeed();
 

@@ -585,11 +585,11 @@ void MainWindow::setupROITab()
 
     segLayout->addLayout(segParamsLayout);
 
-    m_runSegBtn = new QPushButton("Run Segmentation");
+    m_runSegBtn = new QPushButton("Re-run Segmentation");
     m_runSegBtn->setToolTip(
-        "Compute the Base Selection from seed points.\n"
-        "This identifies tooth crown vertices using geodesic distance\n"
-        "and curvature constraints from the picked seed points.");
+        "Manually re-run segmentation with current parameters.\n"
+        "Segmentation runs automatically after each seed is added/removed,\n"
+        "but you can use this button to re-run after changing parameters.");
     connect(m_runSegBtn, &QPushButton::clicked, this, &MainWindow::runSegmentation);
     segLayout->addWidget(m_runSegBtn);
 
@@ -1496,6 +1496,9 @@ void MainWindow::onSeedPicked(double x, double y, double z)
 
     m_statusLabel->setText(QString("Seed point added at (%1, %2, %3). Total: %4")
         .arg(x, 0, 'f', 2).arg(y, 0, 'f', 2).arg(z, 0, 'f', 2).arg(m_seedPoints.size()));
+
+    // Auto-run segmentation after each seed is added
+    runSegmentationAuto();
 }
 
 void MainWindow::runSegmentation()
@@ -1510,16 +1513,23 @@ void MainWindow::runSegmentation()
         return;
     }
 
-    m_statusLabel->setText("Computing curvature...");
+    runSegmentationAuto();
+}
+
+void MainWindow::runSegmentationAuto()
+{
+    // Auto-segmentation: runs without dialogs, called after each seed change
+    if (!m_templateScan || m_seedPoints.empty()) {
+        return;
+    }
+
+    m_statusLabel->setText("Computing segmentation...");
     QApplication::processEvents();
 
     // Compute curvature if not already done
     if (!m_templateScan->curvatureComputed) {
         CurvatureAnalysis::compute(*m_templateScan);
     }
-
-    m_statusLabel->setText("Running tooth segmentation...");
-    QApplication::processEvents();
 
     // Update segmentation parameters from UI
     m_segParams.maxGeodesicMm = m_segGeodesicSpin->value();
@@ -1533,8 +1543,13 @@ void MainWindow::runSegmentation()
     // Count segmented vertices
     std::size_t toothCount = std::count(m_toothMask.begin(), m_toothMask.end(), true);
 
-    m_statusLabel->setText(QString("Segmentation complete: %1 / %2 vertices in tooth crown")
-        .arg(toothCount).arg(m_toothMask.size()));
+    m_statusLabel->setText(QString("Segmentation: %1 vertices (%2 seeds)")
+        .arg(toothCount).arg(m_seedPoints.size()));
+
+    // Auto-enable "Use Base Selection as ROI" when segmentation runs
+    if (!m_useToothMaskChk->isChecked()) {
+        m_useToothMaskChk->setChecked(true);
+    }
 
     // Update visualization to show tooth mask
     updateROIVisualization();
@@ -1546,11 +1561,16 @@ void MainWindow::clearSeeds()
     m_toothMask.clear();
     m_seedCountLabel->setText("Seeds: 0");
 
+    // Uncheck "Use Base Selection" since there's no selection anymore
+    if (m_useToothMaskChk->isChecked()) {
+        m_useToothMaskChk->setChecked(false);
+    }
+
     // Update sphere visualization (only brush points remain)
     m_roiMeshWidget->showPickSpheres(m_brushPoints);
     updateROIVisualization();
 
-    m_statusLabel->setText("Seed points cleared.");
+    m_statusLabel->setText("Seed points and Base Selection cleared.");
 }
 
 void MainWindow::undoLastSeed()
@@ -1567,10 +1587,19 @@ void MainWindow::undoLastSeed()
     allPoints.insert(allPoints.end(), m_seedPoints.begin(), m_seedPoints.end());
     m_roiMeshWidget->showPickSpheres(allPoints);
 
-    // Clear tooth mask since seeds changed
-    m_toothMask.clear();
-
     m_statusLabel->setText(QString("Seed removed. Total: %1").arg(m_seedPoints.size()));
+
+    // Auto-run segmentation with remaining seeds (or clear mask if no seeds left)
+    if (m_seedPoints.empty()) {
+        m_toothMask.clear();
+        // Uncheck "Use Base Selection" since there's no selection anymore
+        if (m_useToothMaskChk->isChecked()) {
+            m_useToothMaskChk->setChecked(false);
+        }
+        updateROIVisualization();
+    } else {
+        runSegmentationAuto();
+    }
 }
 
 // === Occlusal Plane Picking ===
