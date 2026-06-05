@@ -412,14 +412,14 @@ void MainWindow::setupROITab()
     auto* zPlaneParamsLayout = new QFormLayout();
     m_zAboveSpin = new QDoubleSpinBox();
     m_zAboveSpin->setRange(0, 50);
-    m_zAboveSpin->setValue(2.0);
+    m_zAboveSpin->setValue(6.0);
     m_zAboveSpin->setDecimals(1);
     m_zAboveSpin->setSuffix(" mm");
     zPlaneParamsLayout->addRow("Offset A:", m_zAboveSpin);
 
     m_zBelowSpin = new QDoubleSpinBox();
     m_zBelowSpin->setRange(0, 50);
-    m_zBelowSpin->setValue(12.0);
+    m_zBelowSpin->setValue(6.0);
     m_zBelowSpin->setDecimals(1);
     m_zBelowSpin->setSuffix(" mm");
     zPlaneParamsLayout->addRow("Offset B:", m_zBelowSpin);
@@ -442,7 +442,7 @@ void MainWindow::setupROITab()
         "   The initial selection computed by the segmentation algorithm.\n"
         "   Changes here permanently modify the segmentation result.\n\n"
         "2. MANUAL OVERRIDES (ROI Brush Zones):\n"
-        "   Temporary include/exclude zones shown in green/black.\n"
+        "   Temporary include/exclude zones shown in green/red.\n"
         "   These are saved with the ROI template and applied after alignment.\n\n"
         "CHECK this box to edit the Base Selection directly.\n"
         "UNCHECK to create transferable Manual Overrides.");
@@ -461,23 +461,57 @@ void MainWindow::setupROITab()
     m_brushExcludeBtn->setToolTip(
         "Paint to EXCLUDE vertices from the selection.\n"
         "- If 'Edit Base Selection' is checked: removes from Base Selection\n"
-        "- If unchecked: creates Manual Override zones (black)");
+        "- If unchecked: creates Manual Override zones (red)");
     brushBtnRow->addWidget(m_brushIncludeBtn);
     brushBtnRow->addWidget(m_brushExcludeBtn);
     brushLayout->addLayout(brushBtnRow);
 
     connect(m_brushIncludeBtn, &QPushButton::toggled, this, [this](bool checked) {
+        qDebug() << "Include button toggled:" << checked;
         if (checked) {
+            // Disable other pick modes to avoid conflicts
+            if (m_seedPickMode) {
+                m_seedPickBtn->setChecked(false);
+                m_seedPickMode = false;
+            }
+            if (m_occlusPlanePickMode) {
+                m_pickOcclusPlaneBtn->setChecked(false);
+                m_occlusPlanePickMode = false;
+            }
+            QSignalBlocker block(m_brushExcludeBtn);
             m_brushExcludeBtn->setChecked(false);
             m_brushIncludeMode = true;
+            qDebug() << "  -> m_brushIncludeMode set to TRUE, seedPickMode disabled";
             onBrushModeToggled(true);
+            if (m_brushEditToothMask) {
+                m_statusLabel->setText("Brush: ADD to Base Selection (click on mesh)");
+            } else {
+                m_statusLabel->setText("Brush: INCLUDE zone - green (click on mesh)");
+            }
         }
     });
     connect(m_brushExcludeBtn, &QPushButton::toggled, this, [this](bool checked) {
+        qDebug() << "Exclude button toggled:" << checked;
         if (checked) {
+            // Disable other pick modes to avoid conflicts
+            if (m_seedPickMode) {
+                m_seedPickBtn->setChecked(false);
+                m_seedPickMode = false;
+            }
+            if (m_occlusPlanePickMode) {
+                m_pickOcclusPlaneBtn->setChecked(false);
+                m_occlusPlanePickMode = false;
+            }
+            QSignalBlocker block(m_brushIncludeBtn);
             m_brushIncludeBtn->setChecked(false);
             m_brushIncludeMode = false;
+            qDebug() << "  -> m_brushIncludeMode set to FALSE, seedPickMode disabled";
             onBrushModeToggled(true);
+            if (m_brushEditToothMask) {
+                m_statusLabel->setText("Brush: REMOVE from Base Selection (click on mesh)");
+            } else {
+                m_statusLabel->setText("Brush: EXCLUDE zone - red (click on mesh)");
+            }
         }
     });
 
@@ -492,13 +526,23 @@ void MainWindow::setupROITab()
 
     m_clearBrushBtn = new QPushButton("Clear Manual Overrides");
     m_clearBrushBtn->setToolTip(
-        "Remove all Manual Override zones (green/black brush zones).\n"
+        "Remove all Manual Override zones (green/red brush zones).\n"
         "This does NOT affect the Base Selection from segmentation.\n"
         "To reset the Base Selection, re-run Tooth Segmentation.");
     connect(m_clearBrushBtn, &QPushButton::clicked, this, [this]() {
+        std::size_t clearedCount = m_currentROI.brushZones.size();
         m_brushPoints.clear();
         m_currentROI.brushZones.clear();
+        // Hide brush zone pick spheres
+        if (m_templateScan) {
+            m_roiMeshWidget->showPickSpheres(m_seedPoints);  // Show only seed spheres
+        }
         updateROIVisualization();
+        if (clearedCount > 0) {
+            m_statusLabel->setText(QString("Cleared %1 Manual Override zone(s)").arg(clearedCount));
+        } else {
+            m_statusLabel->setText("No Manual Override zones to clear");
+        }
     });
     brushLayout->addWidget(m_clearBrushBtn);
 
@@ -986,6 +1030,11 @@ void MainWindow::onPointPicked(double x, double y, double z)
         double radius = m_brushRadiusSpin->value();
         double radius2 = radius * radius;
 
+        qDebug() << "Edit Base Selection mode: m_brushIncludeMode =" << m_brushIncludeMode
+                 << ", includeBtn checked:" << m_brushIncludeBtn->isChecked()
+                 << ", excludeBtn checked:" << m_brushExcludeBtn->isChecked()
+                 << ", radius:" << radius << "mm";
+
         std::size_t idx = 0;
         std::size_t modified = 0;
         for (auto v : m_templateScan->mesh.vertices()) {
@@ -1000,15 +1049,16 @@ void MainWindow::onPointPicked(double x, double y, double z)
             idx++;
         }
 
-        m_statusLabel->setText(QString("Base Selection: %1 %2 vertices")
-            .arg(m_brushIncludeMode ? "added" : "removed")
-            .arg(modified));
+        m_statusLabel->setText(QString("Base Selection: %1 %2 vertices (r=%3 mm)")
+            .arg(m_brushIncludeMode ? "ADDED" : "REMOVED")
+            .arg(modified)
+            .arg(radius, 0, 'f', 1));
 
         updateROIVisualization();
         return;
     }
 
-    // Add brush zone for ROI editing
+    // Add brush zone for ROI editing (Manual Override)
     DentScanBatch::BrushZone zone;
     zone.center = {x, y, z};
     zone.radius_mm = m_brushRadiusSpin->value();
@@ -1016,6 +1066,13 @@ void MainWindow::onPointPicked(double x, double y, double z)
 
     m_currentROI.brushZones.push_back(zone);
     m_brushPoints.push_back({x, y, z});
+
+    qDebug() << "Added brush zone:" << (zone.include ? "INCLUDE (green)" : "EXCLUDE (red)")
+             << "radius:" << zone.radius_mm << "mm at" << x << y << z;
+    m_statusLabel->setText(QString("Manual Override: %1 zone added (r=%2 mm, total: %3)")
+        .arg(zone.include ? "INCLUDE" : "EXCLUDE")
+        .arg(zone.radius_mm, 0, 'f', 1)
+        .arg(m_currentROI.brushZones.size()));
 
     // Show pick sphere (combine with seed points)
     std::vector<std::array<double, 3>> allPoints = m_brushPoints;
@@ -1270,7 +1327,14 @@ void MainWindow::updateROIVisualization()
 
     // Display visualization
     if (!m_currentROI.brushZones.empty()) {
-        // Show brush zones with distinct colors (green=include, black=exclude)
+        // Show brush zones with distinct colors (green=include, red=exclude)
+        std::size_t nInclude = 0, nExclude = 0;
+        for (const auto& zone : m_currentROI.brushZones) {
+            if (zone.include) nInclude++; else nExclude++;
+        }
+        qDebug() << "Visualizing" << m_currentROI.brushZones.size()
+                 << "brush zones:" << nInclude << "include," << nExclude << "exclude";
+
         std::vector<bool> toothMask;
         if (m_useToothMaskChk && m_useToothMaskChk->isChecked() && !m_toothMask.empty()) {
             toothMask = m_toothMask;
@@ -1278,6 +1342,12 @@ void MainWindow::updateROIVisualization()
         m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, toothMask);
     } else {
         // No brush zones - show combined ROI mask
+        std::size_t nTrue = std::count(mask.begin(), mask.end(), true);
+        std::size_t nToothTrue = std::count(m_toothMask.begin(), m_toothMask.end(), true);
+        qDebug() << "No brush zones, showing tooth segmentation mask."
+                 << "Combined mask:" << nTrue << "/" << mask.size() << "true,"
+                 << "toothMask:" << nToothTrue << "/" << m_toothMask.size() << "true,"
+                 << "useToothMaskChk:" << (m_useToothMaskChk ? m_useToothMaskChk->isChecked() : false);
         m_roiMeshWidget->showToothSegmentation(m_templateScan, mask);
     }
 
@@ -1684,7 +1754,7 @@ void MainWindow::onBrushEditToothMaskToggled(bool active)
     } else if (active) {
         m_statusLabel->setText("Brush now edits Base Selection directly (changes are permanent).");
     } else {
-        m_statusLabel->setText("Brush now creates Manual Overrides (green/black zones, transferable).");
+        m_statusLabel->setText("Brush now creates Manual Overrides (green/red zones, transferable).");
     }
 }
 

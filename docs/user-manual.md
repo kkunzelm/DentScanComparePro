@@ -97,7 +97,7 @@ The ROI (Region of Interest) is built from multiple layers that combine to deter
 │  MANUAL OVERRIDES (applied on top)                              │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  Include zones (green) → force vertices IN               │  │
-│  │  Exclude zones (black) → force vertices OUT              │  │
+│  │  Exclude zones (red) → force vertices OUT              │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -112,7 +112,7 @@ The ROI (Region of Interest) is built from multiple layers that combine to deter
 | Term | Description | Visualization |
 |------|-------------|---------------|
 | **Base Selection** | Initial vertex selection from Tooth Segmentation algorithm. Computed from seed points using geodesic distance and curvature. | Ivory (selected) / Dark grey (not selected) |
-| **Manual Overrides** | Brush zones that force-include or force-exclude specific areas. These are saved with the ROI template and applied after scan alignment. | Green (include) / Black (exclude) |
+| **Manual Overrides** | Brush zones that force-include or force-exclude specific areas. These are saved with the ROI template and applied after scan alignment. | Green (include) / Red (exclude) |
 
 **Important Distinction:**
 
@@ -150,21 +150,24 @@ The brush tool has two modes controlled by the **"Edit Base Selection"** checkbo
 | Checkbox State | Mode | Effect | Colors |
 |----------------|------|--------|--------|
 | **Checked** | Edit Base Selection | Directly modify the segmentation result. Changes are permanent to the current template. | Ivory / Dark grey |
-| **Unchecked** | Create Manual Overrides | Create include/exclude zones that override other ROI layers. These zones are transferable to other scans. | Green / Black |
+| **Unchecked** | Create Manual Overrides | Create include/exclude zones that override other ROI layers. These zones are transferable to other scans. | Green / Red |
 
 **To use the brush tool:**
 
 1. Choose the mode via **"Edit Base Selection"** checkbox
 2. Click **Include** or **Exclude** button to activate painting
-3. Set **Radius** (brush size in mm)
-4. Click/drag on mesh to paint regions
+   - This automatically disables seed picking mode if it was active
+3. Set **Radius** (brush size in mm, 3D spherical radius)
+4. Click on mesh to paint regions
+
+**Note:** Pick modes are mutually exclusive. Activating the brush (Include/Exclude) will disable seed picking. Activating seed picking will disable the brush.
 
 **Manual Overrides (when "Edit Base Selection" is unchecked):**
 
 | Button | Effect | Visualization |
 |--------|--------|---------------|
 | Include | Force vertices INTO ROI regardless of other constraints | Bright green |
-| Exclude | Force vertices OUT of ROI regardless of other constraints | Near black |
+| Exclude | Force vertices OUT of ROI regardless of other constraints | Red |
 
 Use Manual Overrides to:
 - Include a region that's outside the bounding box or plane slab
@@ -184,7 +187,7 @@ Use this mode to:
 
 **Clearing Adjustments:**
 
-- **"Clear Manual Overrides"** button: Removes all green/black brush zones. Does NOT affect the Base Selection.
+- **"Clear Manual Overrides"** button: Removes all green/red brush zones. Does NOT affect the Base Selection.
 - To reset the Base Selection: Re-run Tooth Segmentation with the same or different seed points.
 
 ### Step 4: Run Batch Processing
@@ -213,7 +216,7 @@ Masked ICP uses **all active ROI components** combined with AND logic:
 |-----------|--------------|---------------------|
 | Bounding Box | "Active" checkbox | Only vertices inside box used for alignment |
 | Plane Slab | "Active" checkbox | Only vertices in slab used for alignment |
-| Manual Overrides | (always if present) | Include/exclude specific regions (green/black zones) |
+| Manual Overrides | (always if present) | Include/exclude specific regions (green/red zones) |
 | Base Selection | "Use Base Selection as ROI" | Only tooth crown vertices used |
 
 **Output Directory Selection:**

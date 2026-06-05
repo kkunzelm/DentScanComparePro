@@ -4,6 +4,7 @@
 #include <QVTKOpenGLNativeWidget.h>
 #include <QVBoxLayout>
 #include <QMouseEvent>
+#include <QDebug>
 
 #include <vtkPoints.h>
 #include <vtkCellArray.h>
@@ -664,6 +665,7 @@ void VTKMeshWidget::showBrushZones(const std::shared_ptr<ScanData>& scan,
 
     if (zones.empty()) {
         // No brush zones - show tooth segmentation or plain shading
+        qDebug() << "showBrushZones: zones empty, fallback to tooth segmentation";
         if (!toothMask.empty()) {
             showToothSegmentation(scan, toothMask);
         } else {
@@ -673,6 +675,14 @@ void VTKMeshWidget::showBrushZones(const std::shared_ptr<ScanData>& scan,
     }
 
     clearOverlayActors();
+
+    // Count zone types for debugging
+    int dbgInclude = 0, dbgExclude = 0;
+    for (const auto& z : zones) {
+        if (z.include) dbgInclude++; else dbgExclude++;
+    }
+    qDebug() << "showBrushZones: rendering" << zones.size() << "zones ("
+             << dbgInclude << "include," << dbgExclude << "exclude)";
 
     // Rebuild the polydata with per-vertex RGB colours
     auto pd = cgalToVTK(scan->mesh);
@@ -686,7 +696,7 @@ void VTKMeshWidget::showBrushZones(const std::shared_ptr<ScanData>& scan,
     // Color scheme:
     // - Base (no zone): tooth mask ivory (255,245,220) or light gray (180,180,180)
     // - Include zone: bright green (100, 220, 100)
-    // - Exclude zone: near black (40, 40, 40)
+    // - Exclude zone: red (220, 60, 60)
 
     for (auto v : scan->mesh.vertices()) {
         vtkIdType idx = static_cast<vtkIdType>(v.idx());
@@ -711,7 +721,7 @@ void VTKMeshWidget::showBrushZones(const std::shared_ptr<ScanData>& scan,
         if (inIncludeZone) {
             colors->SetTuple3(idx, 100, 220, 100);  // bright green
         } else if (inExcludeZone) {
-            colors->SetTuple3(idx, 40, 40, 40);     // near black
+            colors->SetTuple3(idx, 220, 60, 60);    // red (clearly distinct from gingiva)
         } else {
             // Base color: use tooth mask if available
             bool isTooth = (!toothMask.empty() && v.idx() < toothMask.size() && toothMask[v.idx()]);
