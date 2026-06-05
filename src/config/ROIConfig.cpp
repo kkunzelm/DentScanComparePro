@@ -44,7 +44,7 @@ ROITemplate ROITemplate::loadFromFile(const QString& filePath)
     // Load Z-plane
     if (root.contains("z_plane")) {
         QJsonObject zPlane = root["z_plane"].toObject();
-        tmpl.roi.zPlane.active = zPlane["active"].toBool(true);
+        tmpl.roi.zPlane.active = zPlane["active"].toBool(false);
         tmpl.roi.zPlane.above_mm = zPlane["above_mm"].toDouble(2.0);
         tmpl.roi.zPlane.below_mm = zPlane["below_mm"].toDouble(12.0);
     }

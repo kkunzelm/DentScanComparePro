@@ -388,7 +388,7 @@ void MainWindow::setupROITab()
     auto* zPlaneLayout = new QVBoxLayout(zPlaneGroup);
 
     m_zPlaneActiveChk = new QCheckBox("Active");
-    m_zPlaneActiveChk->setChecked(true);
+    m_zPlaneActiveChk->setChecked(false);  // Default to inactive - user must explicitly enable
     zPlaneLayout->addWidget(m_zPlaneActiveChk);
 
     // Occlusal plane picking
@@ -1430,7 +1430,7 @@ void MainWindow::runBatch()
             // Control masked ICP via checkbox
             if (!useMaskedICP) {
                 roiTemplate.reset();
-                m_batchLog->append("ROI/Masked ICP: DISABLED (ROI template ignored; using full mesh)");
+                m_batchLog->append("Full-mesh mode: ENABLED (ROI template ignored, forceFullMesh=true)");
             } else if (!roiTemplate->toothSeeds.empty()) {
                 roiTemplate->useToothMask = true;
                 m_batchLog->append(QString("Masked ICP: ENABLED (%1 tooth seeds)")
@@ -1455,8 +1455,10 @@ void MainWindow::runBatch()
     m_batchWatcher = new QFutureWatcher<bool>(this);
     connect(m_batchWatcher, &QFutureWatcher<bool>::finished, this, &MainWindow::onBatchFinished);
 
-    auto future = QtConcurrent::run([this, dataRoot, outputDir, roiTemplate]() {
-        return m_batchRunner->run(m_studyConfig, dataRoot, outputDir, roiTemplate);
+    // forceFullMesh = true when user disabled masked ICP checkbox
+    bool forceFullMesh = !useMaskedICP;
+    auto future = QtConcurrent::run([this, dataRoot, outputDir, roiTemplate, forceFullMesh]() {
+        return m_batchRunner->run(m_studyConfig, dataRoot, outputDir, roiTemplate, forceFullMesh);
     });
 
     m_batchWatcher->setFuture(future);
@@ -1999,8 +2001,9 @@ void MainWindow::generateDifferenceImages()
     int generated = 0;
     int skipped = 0;
 
-    // Cache for loaded GPA means
+    // Cache for loaded GPA means AND their AABB trees (avoids rebuilding tree for each scan)
     std::map<QString, std::shared_ptr<ScanData>> gpaMeanCache;
+    std::map<QString, std::unique_ptr<DistanceField::ReferenceTree>> refTreeCache;
 
     for (int i = 0; i < jsonFiles.size(); ++i) {
         if (progress.wasCanceled()) break;
@@ -2060,26 +2063,28 @@ void MainWindow::generateDifferenceImages()
             p = Point3(transformed.x(), transformed.y(), transformed.z());
         }
 
-        // Load reference mesh (cached)
+        // Load reference mesh and AABB tree (cached for efficiency)
         QString refMeshFilename = useLegacy
             ? (groupId + "_gpa_mean.stl")
             : (groupId + "_reference.stl");
         QString refMeshPath = refMeshDir.absoluteFilePath(refMeshFilename);
-        std::shared_ptr<ScanData> refMesh;
 
-        auto cacheIt = gpaMeanCache.find(groupId);
-        if (cacheIt != gpaMeanCache.end()) {
-            refMesh = cacheIt->second;
-        } else {
-            refMesh = STLReader::read(refMeshPath.toStdString(), errorMsg);
+        // Get or create cached AABB tree for this group's reference
+        auto treeIt = refTreeCache.find(groupId);
+        if (treeIt == refTreeCache.end()) {
+            // Load mesh and build tree (only once per group)
+            std::shared_ptr<ScanData> refMesh = STLReader::read(refMeshPath.toStdString(), errorMsg);
             if (!refMesh) {
                 continue;
             }
             gpaMeanCache[groupId] = refMesh;
+            // Build and cache AABB tree - this is expensive, so do it once
+            refTreeCache[groupId] = std::make_unique<DistanceField::ReferenceTree>(refMesh->mesh);
+            treeIt = refTreeCache.find(groupId);
         }
 
-        // Compute distances
-        DistanceField::compute(*scanData, *refMesh);
+        // Compute distances using cached tree (much faster than rebuilding tree each time)
+        treeIt->second->computeDistances(*scanData);
 
         // Export difference image
         if (DentScanBatch::QCExporter::exportDifferenceImage(

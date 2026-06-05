@@ -210,6 +210,21 @@ Use this mode to:
 
 **Registration Options Explained:**
 
+The **"Use ROI mask for registration (masked ICP)"** checkbox controls whether ROI restrictions are applied:
+
+| Checkbox State | Registration | Metrics |
+|----------------|--------------|---------|
+| **Checked** | Masked ICP (uses active ROI components) | Filtered by ROI |
+| **Unchecked** | Full-mesh ICP (ignores ALL ROI settings) | Full mesh metrics |
+
+**When "Use ROI mask" is UNCHECKED (Full-Mesh Mode):**
+- All ROI settings from templates and configs are **ignored**
+- ICP uses all mesh vertices for alignment
+- Metrics are computed on the entire mesh
+- Console shows: `Full-mesh mode: ACTIVE (ignoring ROI settings from config)`
+
+**When "Use ROI mask" is CHECKED (Masked ICP Mode):**
+
 Masked ICP uses **all active ROI components** combined with AND logic:
 
 | Component | Active Toggle | Effect on Masked ICP |
@@ -218,6 +233,8 @@ Masked ICP uses **all active ROI components** combined with AND logic:
 | Plane Slab | "Active" checkbox | Only vertices in slab used for alignment |
 | Manual Overrides | (always if present) | Include/exclude specific regions (green/red zones) |
 | Base Selection | "Use Base Selection as ROI" | Only tooth crown vertices used |
+
+**Note:** The Plane Slab is now **inactive by default**. If you want to restrict analysis to the occlusal region, you must explicitly check the "Active" checkbox in the Plane Slab section.
 
 **Output Directory Selection:**
 
@@ -395,6 +412,28 @@ The batch processor executes these stages for each SKD group:
 | Missing files | Verify glob patterns in study.json |
 | Scans rotated 90° | Different scanners use different coordinate systems; ICP should handle this |
 | Memory issues | Process fewer groups at a time |
+| ROI still active when disabled | See "Full-Mesh Mode" below |
+| Precision metrics hang | Fixed in v1.0.1 - AABB trees are now cached |
+
+### Full-Mesh Mode (Important for Pre-Aligned Scans)
+
+If you're using pre-aligned STL files (e.g., from DentScanAlign), you typically want **full-mesh ICP** without any ROI restrictions.
+
+**To ensure full-mesh mode:**
+1. **Uncheck** "Use ROI mask for registration (masked ICP)" in Batch Processing options
+2. The console should show: `Full-mesh mode: ACTIVE (ignoring ROI settings from config)`
+
+**If you see `zPlane=ON` in the log but want full-mesh:**
+This is normal - the log shows your config file's ROI settings, but they are **ignored** when the checkbox is unchecked. Look for the confirmation message `Full-mesh mode: ACTIVE`.
+
+**To permanently disable Z-plane in your config:**
+Edit your study config JSON/YAML and set:
+```json
+"z_plane": {
+  "active": false
+}
+```
+Or regenerate the config file using the new defaults.
 
 ### Resume After Interruption
 

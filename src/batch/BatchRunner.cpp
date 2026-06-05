@@ -111,7 +111,8 @@ bool BatchRunner::run(
     const StudyConfig& config,
     const QString& dataRoot,
     const QString& outputDir,
-    const std::optional<ROITemplate>& roiTemplate)
+    const std::optional<ROITemplate>& roiTemplate,
+    bool forceFullMesh)
 {
     m_cancelled.store(false);
     m_warnings.clear();
@@ -123,6 +124,9 @@ bool BatchRunner::run(
     QCExporter::setImageExportEnabled(false);
     if (m_verbose) {
         std::cout << "Note: Difference image export disabled in batch mode.\n" << std::flush;
+        if (forceFullMesh) {
+            std::cout << "Full-mesh mode: ENABLED (ROI/masked ICP bypassed)\n" << std::flush;
+        }
     }
 
     // Load precomputed transforms from DentScanAlign (if directory specified)
@@ -269,7 +273,7 @@ bool BatchRunner::run(
         GroupResult result = processor.process(
             group, files, config.alignment, roiTemplate, outputDir,
             config.externalReferencePath, config.scansPreAligned,
-            precomputedTransforms);
+            precomputedTransforms, forceFullMesh);
 
         // Collect warnings and errors
         m_warnings.append(result.warnings);

@@ -33,12 +33,14 @@ public:
      * @param dataRoot Root directory for scan data
      * @param outputDir Output directory for results
      * @param roiTemplate Optional ROI template with tooth segmentation settings
+     * @param forceFullMesh If true, bypass all ROI/masked ICP and use full mesh
      * @return True if processing completed successfully
      */
     bool run(const StudyConfig& config,
              const QString& dataRoot,
              const QString& outputDir,
-             const std::optional<ROITemplate>& roiTemplate = std::nullopt);
+             const std::optional<ROITemplate>& roiTemplate = std::nullopt,
+             bool forceFullMesh = false);
 
     /**
      * Check if a previous run can be resumed.

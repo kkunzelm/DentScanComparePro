@@ -65,6 +65,37 @@ public:
 
     const SurfaceMesh& mesh() const { return m_mesh; }
 
+    // Compute pairwise distances from sourceMesh to this cached reference
+    std::vector<double> computePairwiseDistances(const SurfaceMesh& sourceMesh) const {
+        std::size_t nVerts = sourceMesh.num_vertices();
+        std::vector<double> distances(nVerts);
+
+        for (auto v : sourceMesh.vertices()) {
+            const Point3& p = sourceMesh.point(v);
+            auto result = m_tree.closest_point_and_primitive(p);
+            const Point3& closestPt = result.first;
+            FaceDesc      primId    = result.second;
+
+            double dist = std::sqrt(CGAL::to_double(
+                CGAL::squared_distance(p, closestPt)));
+
+            // sign: dot(p - closestPt, face_normal)
+            auto hh = m_mesh.halfedge(primId);
+            const Point3& fp0 = m_mesh.point(m_mesh.source(hh));
+            const Point3& fp1 = m_mesh.point(m_mesh.target(hh));
+            const Point3& fp2 = m_mesh.point(m_mesh.target(m_mesh.next(hh)));
+            Vector3K fn = CGAL::cross_product(fp1 - fp0, fp2 - fp0);
+
+            Vector3K diff(p.x() - closestPt.x(),
+                          p.y() - closestPt.y(),
+                          p.z() - closestPt.z());
+            double dot = CGAL::to_double(diff * fn);
+            distances[v.idx()] = (dot >= 0.0) ? dist : -dist;
+        }
+
+        return distances;
+    }
+
 private:
     const SurfaceMesh& m_mesh;
     AABBTree m_tree;
@@ -86,6 +117,17 @@ void ReferenceTree::computeDistances(ScanData& scan) const {
 
 const SurfaceMesh& ReferenceTree::mesh() const {
     return m_impl->mesh();
+}
+
+std::vector<double> ReferenceTree::computePairwiseDistances(const SurfaceMesh& sourceMesh) const {
+    return m_impl->computePairwiseDistances(sourceMesh);
+}
+
+// ─── computePairwiseWithTree function ────────────────────────────────────────
+
+std::vector<double> computePairwiseWithTree(const SurfaceMesh& sourceMesh,
+                                             const ReferenceTree& targetTree) {
+    return targetTree.computePairwiseDistances(sourceMesh);
 }
 
 // ─── Original compute function ───────────────────────────────────────────────

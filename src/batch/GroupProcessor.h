@@ -85,6 +85,7 @@ public:
      * @param externalRefPath Optional path to external reference STL (empty = compute GPA)
      * @param scansPreAligned If true, skip alignment (scans already aligned by DentScanAlign)
      * @param precomputedTransforms Optional map of normalized filename -> transform from DentScanAlign
+     * @param forceFullMesh If true, bypass all ROI/masked ICP and use full mesh
      * @return Processing result
      */
     GroupResult process(
@@ -95,7 +96,8 @@ public:
         const QString& outputDir = QString(),
         const QString& externalRefPath = QString(),
         bool scansPreAligned = false,
-        const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {});
+        const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {},
+        bool forceFullMesh = false);
 
     /**
      * Set external cancellation flag to check during processing.

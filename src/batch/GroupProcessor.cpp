@@ -34,7 +34,8 @@ GroupResult GroupProcessor::process(
     const QString& outputDir,
     const QString& externalRefPath,
     bool scansPreAligned,
-    const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms)
+    const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms,
+    bool forceFullMesh)
 {
     GroupResult result;
     result.groupId = group.id;
@@ -96,12 +97,15 @@ GroupResult GroupProcessor::process(
 
     // Stage 3 (MOVED EARLIER): Compute tooth masks BEFORE alignment
     // This allows masked ICP to focus on tooth surfaces
+    // Skip when forceFullMesh is set (user disabled ROI/masked ICP in GUI)
     std::vector<std::vector<bool>> toothMasks;
-    if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+    if (!forceFullMesh && roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
         emit progressUpdated(++m_currentStep, m_totalSteps, "Computing tooth segmentation");
         std::cout << "    Computing tooth segmentation..." << std::flush;
         toothMasks = computeToothMasks(scans, *roiTemplate);
         std::cout << " done (" << toothMasks.size() << " masks)\n" << std::flush;
+    } else if (forceFullMesh) {
+        std::cout << "    Tooth segmentation: SKIPPED (full-mesh mode)\n" << std::flush;
     }
 
     if (wasCancelled()) return result;
@@ -137,7 +141,19 @@ GroupResult GroupProcessor::process(
         bool hasToothMask = !toothMasks.empty();
 
         // Use masked ICP if any ROI component is active
-        bool useMaskedICP = hasActiveROI(effectiveROI, hasToothMask);
+        // But respect forceFullMesh flag (user explicitly disabled ROI in GUI)
+        bool useMaskedICP = !forceFullMesh && hasActiveROI(effectiveROI, hasToothMask);
+
+        // Debug logging for ROI state
+        if (forceFullMesh) {
+            std::cout << "    Full-mesh mode: ACTIVE (ignoring ROI settings from config)\n" << std::flush;
+        } else {
+            std::cout << "    ROI config: bbox=" << (effectiveROI.bbox.active ? "ON" : "OFF")
+                      << ", zPlane=" << (effectiveROI.zPlane.active ? "ON" : "OFF")
+                      << ", brushZones=" << effectiveROI.brushZones.size()
+                      << ", toothMask=" << (hasToothMask ? "YES" : "NO") << "\n" << std::flush;
+        }
+
         if (useMaskedICP) {
             std::cout << "    Running MASKED ICP refinement against reference";
             if (effectiveROI.bbox.active) std::cout << " [bbox]";
@@ -146,7 +162,7 @@ GroupResult GroupProcessor::process(
             if (hasToothMask) std::cout << " [teeth]";
             std::cout << "..." << std::flush;
         } else {
-            std::cout << "    Running ICP refinement against reference..." << std::flush;
+            std::cout << "    Running FULL-MESH ICP refinement against reference..." << std::flush;
         }
 
         ScanData refData;
@@ -206,17 +222,22 @@ GroupResult GroupProcessor::process(
     if (wasCancelled()) return result;
 
     // Use ROI from template if provided, otherwise from group config
-    const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
+    // When forceFullMesh is true, use an inactive ROI to ensure full-mesh metrics
+    ROIConfig metricsROI;
+    if (!forceFullMesh) {
+        metricsROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
+    }
+    // If forceFullMesh, metricsROI keeps default values (all inactive)
 
     // Stage 6: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
-    computeTruenessMetrics(scans, files, effectiveROI, group, toothMasks, result);
+    computeTruenessMetrics(scans, files, metricsROI, group, toothMasks, result);
 
     if (wasCancelled()) return result;
 
     // Stage 7: Compute precision metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
-    computePrecisionMetrics(scans, files, effectiveROI, group, toothMasks, result);
+    computePrecisionMetrics(scans, files, metricsROI, group, toothMasks, result);
 
     if (wasCancelled()) return result;
 
@@ -646,23 +667,38 @@ void GroupProcessor::computePrecisionMetrics(
             continue;  // Need at least 2 scans for precision
         }
 
+        // Pre-build AABB trees for all scans in this scanner group
+        // This avoids O(N^2) tree construction - build N trees once, reuse
+        std::cout << "\n      Building AABB trees for " << scannerId << " ("
+                  << scannerScans.size() << " scans)..." << std::flush;
+        std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees;
+        trees.reserve(scannerScans.size());
+        for (const auto& scan : scannerScans) {
+            trees.push_back(std::make_unique<DistanceField::ReferenceTree>(scan->mesh));
+        }
+        std::cout << " done\n      Computing pairwise distances..." << std::flush;
+
         PrecisionReport report;
         report.scannerId = QString::fromStdString(scannerId);
         report.groupId = group.id;
         report.skd_mm = group.skd_mm;
 
         std::vector<double> pairwiseRMS;
+        int totalPairs = static_cast<int>(scannerScans.size() * (scannerScans.size() - 1) / 2);
+        int pairsDone = 0;
 
-        // Compute pairwise RMS between all scan pairs
-        // Use optimized computePairwise to avoid copying ScanData
+        // Compute pairwise RMS between all scan pairs using pre-built trees
         for (std::size_t i = 0; i < scannerScans.size(); i++) {
             for (std::size_t j = i + 1; j < scannerScans.size(); j++) {
                 const auto& scan1 = scannerScans[i];
-                const auto& scan2 = scannerScans[j];
 
-                // Use optimized function that works directly on meshes
-                std::vector<double> distances = DistanceField::computePairwise(
-                    scan1->mesh, scan2->mesh);
+                // Use pre-built tree for scan j
+                std::vector<double> distances = trees[j]->computePairwiseDistances(scan1->mesh);
+
+                pairsDone++;
+                if (pairsDone % 5 == 0 || pairsDone == totalPairs) {
+                    std::cout << "." << std::flush;
+                }
 
                 if (distances.empty()) {
                     continue;
@@ -721,10 +757,10 @@ void GroupProcessor::computePrecisionMetrics(
         }
 
         result.precisionReports.push_back(report);
-        std::cout << "." << std::flush;
+        std::cout << " done (" << pairsDone << " pairs)\n" << std::flush;
     }
 
-    std::cout << " done (" << result.precisionReports.size() << " scanner groups)\n" << std::flush;
+    std::cout << "    Precision metrics complete: " << result.precisionReports.size() << " scanner groups\n" << std::flush;
 }
 
 std::vector<std::vector<bool>> GroupProcessor::computeToothMasks(

@@ -45,6 +45,13 @@ public:
     void computeDistances(ScanData& scan) const;
 
     /**
+     * Compute signed distances from source mesh vertices to this reference.
+     * Returns distances vector without modifying source.
+     * Use this for batch pairwise comparisons.
+     */
+    std::vector<double> computePairwiseDistances(const SurfaceMesh& sourceMesh) const;
+
+    /**
      * Get the reference mesh (for normal computation).
      */
     const SurfaceMesh& mesh() const;
@@ -62,8 +69,15 @@ void compute(ScanData& scan, const ScanData& reference);
 // Compute distances between two meshes without modifying either.
 // Returns per-vertex signed distances from sourceMesh to targetMesh.
 // This is more efficient for pairwise comparisons as it doesn't copy data.
+// WARNING: This rebuilds the AABB tree for targetMesh each time. For batch
+// pairwise comparisons, use computePairwiseWithTree instead.
 std::vector<double> computePairwise(const SurfaceMesh& sourceMesh,
                                      const SurfaceMesh& targetMesh);
+
+// Compute distances using a pre-built AABB tree.
+// Use this for batch pairwise comparisons to avoid rebuilding the tree.
+std::vector<double> computePairwiseWithTree(const SurfaceMesh& sourceMesh,
+                                             const ReferenceTree& targetTree);
 
 // Fills the local-accuracy section of report from scan->distanceToRef.
 //

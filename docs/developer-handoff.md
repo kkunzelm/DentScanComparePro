@@ -734,6 +734,58 @@ evaluation_passes:
 
 ## Changelog
 
+### 2026-06-05 – Full-Mesh Mode Fix and Performance Optimizations
+
+**Problem:** Registration quality degraded for ~50% of scans when using pre-aligned STL files from DentScanAlign. Root causes identified:
+1. ROI/masked ICP was being triggered even when disabled in GUI (Z-plane defaulted to active)
+2. Precision metrics computation hung due to O(N²) AABB tree constructions
+3. Difference image generation was slow due to repeated tree building
+
+**Fix 1: Z-Plane Default Changed to Inactive**
+- `ROIConfig.h`: `ZPlaneSlab.active` default changed from `true` to `false`
+- `MainWindow.cpp`: Z-plane checkbox now unchecked by default
+- `ROIConfig.cpp`, `StudyConfig.cpp`: JSON/YAML loading defaults changed to `false`
+- **Impact**: Users must now explicitly enable Z-plane ROI restriction
+
+**Fix 2: Explicit `forceFullMesh` Flag**
+- Added `forceFullMesh` parameter to `BatchRunner::run()` and `GroupProcessor::process()`
+- When GUI checkbox "Use ROI mask for registration" is unchecked, `forceFullMesh=true`
+- This bypasses ALL ROI logic regardless of config file settings:
+  - Skips tooth segmentation computation
+  - Uses full-mesh ICP (not masked)
+  - Uses empty ROI for metrics computation
+- Added debug logging showing ROI state and whether it's being ignored
+
+**Fix 3: AABB Tree Caching for Precision Metrics**
+- Added `ReferenceTree::computePairwiseDistances()` method to `DistanceField.{h,cpp}`
+- `GroupProcessor::computePrecisionMetrics()` now pre-builds AABB trees for all scans in each scanner group
+- Trees are reused across pairwise comparisons instead of rebuilt each time
+- **Performance**: For 5 scans per scanner, reduces tree builds from 10 to 5 (O(N) instead of O(N²))
+
+**Fix 4: AABB Tree Caching for Difference Image Generation**
+- `MainWindow::generateDifferenceImages()` now caches `ReferenceTree` per group
+- Previously built a new AABB tree for every scan (expensive for 180+ scans)
+- Now builds one tree per reference mesh (typically 6-7 for a full study)
+
+**Files Modified:**
+- `src/config/ROIConfig.h` - ZPlaneSlab.active default = false
+- `src/config/ROIConfig.cpp` - JSON loading default = false
+- `src/config/StudyConfig.cpp` - JSON/YAML defaults = false, createDefault() = false
+- `src/batch/BatchRunner.{h,cpp}` - Added forceFullMesh parameter
+- `src/batch/GroupProcessor.{h,cpp}` - Added forceFullMesh, cached AABB trees for precision
+- `src/core/DistanceField.{h,cpp}` - Added computePairwiseDistances() to ReferenceTree
+- `src/gui/MainWindow.cpp` - Pass forceFullMesh, cache trees for difference images
+
+**New Console Output:**
+```
+Full-mesh mode: ACTIVE (ignoring ROI settings from config)
+Running FULL-MESH ICP refinement against reference...
+Building AABB trees for <scanner> (N scans)... done
+Computing pairwise distances...... done (M pairs)
+```
+
+**Note:** Existing study config files may still have `z_plane: { active: true }` saved. This is now ignored when `forceFullMesh=true` (checkbox unchecked). To permanently fix, regenerate the config or manually edit to set `active: false`.
+
 ### 2026-06-04 – Masked ICP, DentScanAlign Integration, and Enhanced QC
 
 **Feature 1: Load DentScanAlign JSON Transforms**

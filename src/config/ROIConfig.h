@@ -36,7 +36,7 @@ struct BoundingBox {
 struct ZPlaneSlab {
     double above_mm = 2.0;   // Distance above occlusal plane to include
     double below_mm = 12.0;  // Distance below occlusal plane to include
-    bool active = true;
+    bool active = false;  // Default to inactive - user must explicitly enable
 
     /**
      * Check if a Z coordinate is within the slab.

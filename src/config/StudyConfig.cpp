@@ -35,7 +35,7 @@ static ROIConfig parseROIFromJSON(const QJsonObject& obj) {
 
     if (obj.contains("z_plane")) {
         auto zp = obj["z_plane"].toObject();
-        roi.zPlane.active = zp["active"].toBool(true);
+        roi.zPlane.active = zp["active"].toBool(false);
         roi.zPlane.above_mm = zp["above_mm"].toDouble(2.0);
         roi.zPlane.below_mm = zp["below_mm"].toDouble(12.0);
     }
@@ -327,9 +327,9 @@ StudyConfig StudyConfig::createDefault() {
         {"Trios5", {"Trios*5*"}}
     };
 
-    // Default ROI
+    // Default ROI - z-plane inactive by default, user must explicitly enable
     ROIConfig defaultROI;
-    defaultROI.zPlane.active = true;
+    defaultROI.zPlane.active = false;
     defaultROI.zPlane.above_mm = 2.0;
     defaultROI.zPlane.below_mm = 12.0;
     defaultROI.outlierSigma = 3.0;
@@ -459,7 +459,7 @@ static ROIConfig parseROIFromYAML(const YAML::Node& node) {
 
     if (node["z_plane"]) {
         auto zp = node["z_plane"];
-        roi.zPlane.active = zp["active"].as<bool>(true);
+        roi.zPlane.active = zp["active"].as<bool>(false);
         roi.zPlane.above_mm = zp["above_mm"].as<double>(2.0);
         roi.zPlane.below_mm = zp["below_mm"].as<double>(12.0);
     }
