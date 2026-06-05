@@ -79,6 +79,48 @@ Create a JSON file describing your study:
 
 The ROI template defines which region of the scan to analyze. This is especially important for focusing on tooth surfaces and excluding gingiva.
 
+#### Understanding the ROI Selection Model
+
+The ROI (Region of Interest) is built from multiple layers that combine to determine which vertices are included in analysis:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  GEOMETRIC CONSTRAINTS (combined with AND)                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │ Bounding Box │  │  Plane Slab  │  │    Base      │          │
+│  │  (optional)  │──│  (optional)  │──│  Selection   │          │
+│  └──────────────┘  └──────────────┘  └──────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MANUAL OVERRIDES (applied on top)                              │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Include zones (green) → force vertices IN               │  │
+│  │  Exclude zones (black) → force vertices OUT              │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  FINAL ROI → used for ICP alignment and metric computation      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Concepts:**
+
+| Term | Description | Visualization |
+|------|-------------|---------------|
+| **Base Selection** | Initial vertex selection from Tooth Segmentation algorithm. Computed from seed points using geodesic distance and curvature. | Ivory (selected) / Dark grey (not selected) |
+| **Manual Overrides** | Brush zones that force-include or force-exclude specific areas. These are saved with the ROI template and applied after scan alignment. | Green (include) / Black (exclude) |
+
+**Important Distinction:**
+
+- **Base Selection** is scan-specific: it's computed from a template scan's geometry and identifies tooth crown vertices
+- **Manual Overrides** are transferable: they're defined as 3D regions and can be applied to other scans after alignment
+
+#### Creating an ROI Template
+
 **In GUI Mode:**
 
 1. Go to the **ROI Template Editor** tab
@@ -86,10 +128,10 @@ The ROI template defines which region of the scan to analyze. This is especially
 3. Configure the region of interest:
    - **Bounding Box**: Limit analysis to a rectangular region
    - **Plane Slab (ROI Height)**: Define a slab with **Offset A** and **Offset B** distances from a picked plane
-   - **Tooth Segmentation**: Place seed points on tooth cusps, then run segmentation
+   - **Tooth Segmentation**: Place seed points on tooth cusps, then run segmentation to compute the Base Selection
 4. Click **Save Template...** in the ROI Template I/O section to save as JSON
 
-**Tooth Segmentation Workflow:**
+**Tooth Segmentation Workflow (Base Selection):**
 
 1. Click **Pick Seeds** button
 2. Click on the cusp tips of each tooth (one click per tooth)
@@ -97,26 +139,53 @@ The ROI template defines which region of the scan to analyze. This is especially
    - Max Geodesic: tooth size limit (default 12 mm)
    - Max Crease: angle at CEJ boundary (default 50°)
    - Min Curvature: gingival sulcus threshold (default -4.0)
-4. Click **Run Segmentation**
-5. Check **Use tooth mask as ROI**
+4. Click **Run Segmentation** to compute the Base Selection
+5. Check **Use Base Selection as ROI** to include it in the final ROI
 6. Save the template
 
-**Brush Tool (Manual ROI Adjustment):**
+**Brush Tool (Manual Adjustments):**
 
-The brush tool allows manual override of the geometric ROI (BBox + Plane Slab):
+The brush tool has two modes controlled by the **"Edit Base Selection"** checkbox:
 
-1. Click **Include** or **Exclude** button
-2. Set **Radius** (brush size in mm)
-3. Click on mesh to paint regions
+| Checkbox State | Mode | Effect | Colors |
+|----------------|------|--------|--------|
+| **Checked** | Edit Base Selection | Directly modify the segmentation result. Changes are permanent to the current template. | Ivory / Dark grey |
+| **Unchecked** | Create Manual Overrides | Create include/exclude zones that override other ROI layers. These zones are transferable to other scans. | Green / Black |
+
+**To use the brush tool:**
+
+1. Choose the mode via **"Edit Base Selection"** checkbox
+2. Click **Include** or **Exclude** button to activate painting
+3. Set **Radius** (brush size in mm)
+4. Click/drag on mesh to paint regions
+
+**Manual Overrides (when "Edit Base Selection" is unchecked):**
 
 | Button | Effect | Visualization |
 |--------|--------|---------------|
-| Include | Force vertices INTO ROI | Bright green |
-| Exclude | Force vertices OUT of ROI | Near black |
+| Include | Force vertices INTO ROI regardless of other constraints | Bright green |
+| Exclude | Force vertices OUT of ROI regardless of other constraints | Near black |
 
-Brush zones override the geometric ROI decisions. Use this to:
-- Include a region that's outside the bounding box
-- Exclude artifacts or unwanted areas within the ROI
+Use Manual Overrides to:
+- Include a region that's outside the bounding box or plane slab
+- Exclude artifacts or unwanted areas that the segmentation included
+- Make adjustments that should apply to all scans in a batch
+
+**Editing Base Selection (when "Edit Base Selection" is checked):**
+
+| Button | Effect |
+|--------|--------|
+| Include | Add vertices to the Base Selection (tooth region) |
+| Exclude | Remove vertices from the Base Selection |
+
+Use this mode to:
+- Fix segmentation errors (missed tooth areas, included gingiva)
+- Fine-tune the boundary between tooth and gingiva
+
+**Clearing Adjustments:**
+
+- **"Clear Manual Overrides"** button: Removes all green/black brush zones. Does NOT affect the Base Selection.
+- To reset the Base Selection: Re-run Tooth Segmentation with the same or different seed points.
 
 ### Step 4: Run Batch Processing
 
@@ -144,8 +213,8 @@ Masked ICP uses **all active ROI components** combined with AND logic:
 |-----------|--------------|---------------------|
 | Bounding Box | "Active" checkbox | Only vertices inside box used for alignment |
 | Plane Slab | "Active" checkbox | Only vertices in slab used for alignment |
-| Brush zones | (always if present) | Include/exclude specific regions |
-| Tooth mask | "Use tooth mask as ROI" | Only tooth crown vertices used |
+| Manual Overrides | (always if present) | Include/exclude specific regions (green/black zones) |
+| Base Selection | "Use Base Selection as ROI" | Only tooth crown vertices used |
 
 **Output Directory Selection:**
 
@@ -194,7 +263,7 @@ Note: Even when masked ICP is disabled, the ROI template is still used to filter
 |-----------|----------|
 | `qc/reference_meshes/` | Reference meshes (GPA mean or external reference, one STL per SKD group) |
 | `qc/transforms/` | Transform matrices + metrics (JSON per scan) |
-| `qc/segmented/` | Tooth-only meshes (when tooth mask used) |
+| `qc/segmented/` | Tooth-only meshes (when Base Selection is used) |
 | `qc/difference_images/` | Color-coded distance maps (PNG) |
 
 ### Step 6: Quality Control Review
@@ -273,10 +342,10 @@ The batch processor executes these stages for each SKD group:
 
 1. **Load STL files** - Parse binary STL into CGAL meshes
 2. **Compute curvature** - CGAL interpolated curvatures for segmentation
-3. **Compute tooth masks** (if ROI template provided) - Dijkstra-based segmentation from seeds
+3. **Compute Base Selection** (if ROI template provided) - Dijkstra-based segmentation from seeds
 4. **Apply pre-computed transforms** (if `--alignments` provided) - Load DentScanAlign results
 5. **Alignment** - GPA or ICP against external reference
-   - Uses **masked ICP** when tooth masks available (focuses on tooth surfaces)
+   - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
 6. **Compute distances** - CGAL AABB-tree signed distances to reference
 7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage
 8. **Compute precision metrics** - Pairwise comparisons between repetitions

@@ -435,18 +435,33 @@ void MainWindow::setupROITab()
     auto* brushGroup = new QGroupBox("Brush Tool");
     auto* brushLayout = new QVBoxLayout(brushGroup);
 
-    m_brushEditToothMaskChk = new QCheckBox("Edit tooth mask (not ROI zones)");
-    m_brushEditToothMaskChk->setToolTip("When checked, brush directly adds/removes vertices from tooth mask.\nWhen unchecked, brush creates ROI zones.");
+    m_brushEditToothMaskChk = new QCheckBox("Edit Base Selection");
+    m_brushEditToothMaskChk->setToolTip(
+        "ROI Selection has two layers:\n\n"
+        "1. BASE SELECTION (from Tooth Segmentation):\n"
+        "   The initial selection computed by the segmentation algorithm.\n"
+        "   Changes here permanently modify the segmentation result.\n\n"
+        "2. MANUAL OVERRIDES (ROI Brush Zones):\n"
+        "   Temporary include/exclude zones shown in green/black.\n"
+        "   These are saved with the ROI template and applied after alignment.\n\n"
+        "CHECK this box to edit the Base Selection directly.\n"
+        "UNCHECK to create transferable Manual Overrides.");
     connect(m_brushEditToothMaskChk, &QCheckBox::toggled, this, &MainWindow::onBrushEditToothMaskToggled);
     brushLayout->addWidget(m_brushEditToothMaskChk);
 
     auto* brushBtnRow = new QHBoxLayout();
     m_brushIncludeBtn = new QPushButton("Include");
     m_brushIncludeBtn->setCheckable(true);
-    m_brushIncludeBtn->setToolTip("Click to add vertices to ROI/tooth mask");
+    m_brushIncludeBtn->setToolTip(
+        "Paint to INCLUDE vertices in the selection.\n"
+        "- If 'Edit Base Selection' is checked: adds to Base Selection (ivory)\n"
+        "- If unchecked: creates Manual Override zones (green)");
     m_brushExcludeBtn = new QPushButton("Exclude");
     m_brushExcludeBtn->setCheckable(true);
-    m_brushExcludeBtn->setToolTip("Click to remove vertices from ROI/tooth mask");
+    m_brushExcludeBtn->setToolTip(
+        "Paint to EXCLUDE vertices from the selection.\n"
+        "- If 'Edit Base Selection' is checked: removes from Base Selection\n"
+        "- If unchecked: creates Manual Override zones (black)");
     brushBtnRow->addWidget(m_brushIncludeBtn);
     brushBtnRow->addWidget(m_brushExcludeBtn);
     brushLayout->addLayout(brushBtnRow);
@@ -475,7 +490,11 @@ void MainWindow::setupROITab()
     brushRadiusLayout->addRow("Radius:", m_brushRadiusSpin);
     brushLayout->addLayout(brushRadiusLayout);
 
-    m_clearBrushBtn = new QPushButton("Clear All Brush Zones");
+    m_clearBrushBtn = new QPushButton("Clear Manual Overrides");
+    m_clearBrushBtn->setToolTip(
+        "Remove all Manual Override zones (green/black brush zones).\n"
+        "This does NOT affect the Base Selection from segmentation.\n"
+        "To reset the Base Selection, re-run Tooth Segmentation.");
     connect(m_clearBrushBtn, &QPushButton::clicked, this, [this]() {
         m_brushPoints.clear();
         m_currentROI.brushZones.clear();
@@ -567,12 +586,21 @@ void MainWindow::setupROITab()
     segLayout->addLayout(segParamsLayout);
 
     m_runSegBtn = new QPushButton("Run Segmentation");
-    m_runSegBtn->setToolTip("Compute tooth mask from seed points");
+    m_runSegBtn->setToolTip(
+        "Compute the Base Selection from seed points.\n"
+        "This identifies tooth crown vertices using geodesic distance\n"
+        "and curvature constraints from the picked seed points.");
     connect(m_runSegBtn, &QPushButton::clicked, this, &MainWindow::runSegmentation);
     segLayout->addWidget(m_runSegBtn);
 
-    m_useToothMaskChk = new QCheckBox("Use tooth mask as ROI");
-    m_useToothMaskChk->setToolTip("When checked, only tooth crown vertices are included in analysis");
+    m_useToothMaskChk = new QCheckBox("Use Base Selection as ROI");
+    m_useToothMaskChk->setToolTip(
+        "Include the Base Selection (from Tooth Segmentation) in the final ROI.\n\n"
+        "When checked: Only vertices in the Base Selection are analyzed.\n"
+        "The final ROI combines: BBox AND Plane Slab AND Base Selection,\n"
+        "then Manual Overrides are applied on top.\n\n"
+        "When unchecked: Base Selection is ignored; ROI uses only\n"
+        "BBox, Plane Slab, and Manual Overrides.");
     connect(m_useToothMaskChk, &QCheckBox::toggled, this, &MainWindow::updateROIVisualization);
     segLayout->addWidget(m_useToothMaskChk);
 
@@ -972,8 +1000,8 @@ void MainWindow::onPointPicked(double x, double y, double z)
             idx++;
         }
 
-        m_statusLabel->setText(QString("Brush: %1 %2 vertices")
-            .arg(m_brushIncludeMode ? "included" : "excluded")
+        m_statusLabel->setText(QString("Base Selection: %1 %2 vertices")
+            .arg(m_brushIncludeMode ? "added" : "removed")
             .arg(modified));
 
         updateROIVisualization();
@@ -1621,13 +1649,13 @@ void MainWindow::onBrushEditToothMaskToggled(bool active)
     m_brushEditToothMask = active;
 
     if (active && m_toothMask.empty() && m_templateScan) {
-        // Initialize tooth mask to all false if not already computed
+        // Initialize Base Selection to all false if not already computed
         m_toothMask.resize(m_templateScan->mesh.number_of_vertices(), false);
-        m_statusLabel->setText("Tooth mask initialized. Use brush to add/remove vertices.");
+        m_statusLabel->setText("Base Selection initialized (empty). Use brush to add/remove vertices.");
     } else if (active) {
-        m_statusLabel->setText("Brush now edits tooth mask directly.");
+        m_statusLabel->setText("Brush now edits Base Selection directly (changes are permanent).");
     } else {
-        m_statusLabel->setText("Brush now creates ROI zones.");
+        m_statusLabel->setText("Brush now creates Manual Overrides (green/black zones, transferable).");
     }
 }
 
