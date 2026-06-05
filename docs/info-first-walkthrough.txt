@@ -1,0 +1,100 @@
+Now I have a clear picture. Here's your step-by-step guide for the first evaluation:
+ 
+---
+First Evaluation - Step by Step 
+ 
+Overview
+ 
+- 184 scan files (6 scanners × ~5 repetitions × 6-7 SKD levels)
+- 6 scanners: Primescan, Trios4, Trios5, Medit i700, iTeroLumina, FussenS6000
+- 7 SKD levels: 18, 20, 22, 24, 26, 28, 30 mm (only iTero has SKD 18)
+ 
+---
+Option A: Command Line (Recommended for First Run)
+ 
+This runs faster and gives you detailed console output: 
+ 
+cd /home/kkunzelm/claude-code/DentScanComparePro/build
+ 
+./src/DentScanComparePro --batch --study ~/claude-code/DentScanComparePro/data/full_study.json --data-root "/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS" --output "/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/results_batch" --verbose 
+
+In case of re-running need of the batch file, first: 
+
+rm "/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/results_batch/.batch_progress.json"
+
+and then repeat:
+
+./src/DentScanComparePro --batch --study ~/claude-code/DentScanComparePro/data/full_study.json --data-root "/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS" --output "/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/results_batch" --verbose
+
+
+Expected output structure:                                                                                                
+  results_batch/                                                                                                            
+  ├── qc/                                                                                                                   
+  │   ├── gpa_means/           # GPA reference meshes                                                                       
+  │   │   ├── SKD_18_gpa_mean.stl                                                                                           
+  │   │   ├── SKD_20_gpa_mean.stl                                                                                           
+  │   │   └── ...                                                                                                           
+  │   └── transforms/          # Metrics + transforms per scan                                                              
+  │       ├── iTeroLumina_SKD_18_r1.json                                                                                    
+  │       └── ...                                                                                                           
+  ├── trueness_metrics.csv                                                                                                  
+  ├── precision_metrics.csv                                                                                                 
+  └── summary_stats.csv                                                                                                     
+                                                                                                                            
+  The difference images can be generated later using the GUI mode when needed. 
+
+--------------------
+
+Want me to run this now?
+ 
+---
+Option B: GUI Mode
+ 
+1. Start the application: 
+cd /home/kkunzelm/claude-code/DentScanComparePro/build
+./DentScanComparePro
+2. Tab 1 - Study Configuration: 
+ - Study Config: Browse to ~/claude-code/DentScanComparePro/data/full_study.json
+ - Data Root: /KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS 
+ - Output Dir: /KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/results_batch 
+ - Click "Load Configuration"
+3. Tab 2 - ROI Template Editor (optional but recommended): 
+ - Click "Load Template Scan" → select the reference scan:
+/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/Reference Scan/Referenzscan mit Tischscanner Hauslabor.stl
+ - Click "Load Template" → select:
+/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOS/Reference Scan/roi_template.json 
+ - Verify the Z-plane slab (2mm above, 12mm below occlusal surface)
+ - Optionally add tooth segmentation seeds for more precise ROI 
+4. Tab 3 - Batch Processing: 
+ - Click "Run Batch Processing"
+ - Watch the progress log
+ - Processing 184 files will take approximately 20-40 minutes
+5. Tab 4 - Results: 
+ - Click "Refresh File List" to see output CSVs
+6. Tab 5 - QC Review (after batch completes):
+ - Click "Load QC Data from Results" 
+ - Review difference images in thumbnail grid 
+ - Double-click to flag any obvious registration failures as "errands"
+ - Click "Save QC Status"
+ 
+---
+Expected Output Structure 
+ 
+After processing, you'll have:
+results_batch/
+├── trueness_metrics.csv # Main results (errands excluded after QC) 
+├── trueness_metrics_all.csv# Complete results (before QC filtering)
+├── precision_metrics.csv# Pairwise precision per scanner
+├── summary_stats.csv # Aggregated statistics
+├── qc/ 
+│├── gpa_means/# GPA reference mesh per SKD group 
+││├── SKD_18_gpa_mean.stl 
+││├── SKD_20_gpa_mean.stl 
+││└── ...
+│├── difference_images/ # Color-coded distance maps (PNG)
+││└── Primescan_SKD_20_r1.png, ... 
+│├── transforms/  # Registration transforms (JSON)
+│└── qc_status.json  # Your QC decisions 
+ 
+---
+Which option would you prefer? I can start the CLI batch run now, or you can launch the GUI. 

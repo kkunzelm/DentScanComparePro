@@ -1429,8 +1429,8 @@ void MainWindow::runBatch()
 
             // Control masked ICP via checkbox
             if (!useMaskedICP) {
-                roiTemplate->useToothMask = false;
-                m_batchLog->append("Masked ICP: DISABLED (using full-mesh ICP)");
+                roiTemplate.reset();
+                m_batchLog->append("ROI/Masked ICP: DISABLED (ROI template ignored; using full mesh)");
             } else if (!roiTemplate->toothSeeds.empty()) {
                 roiTemplate->useToothMask = true;
                 m_batchLog->append(QString("Masked ICP: ENABLED (%1 tooth seeds)")

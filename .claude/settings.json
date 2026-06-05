@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(tree:*)",
+      "Bash(du:*)",
+      "Bash(mkdir:*)",
+      "Bash(cd:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(cmake:*)",
+      "Bash(make:*)",
+      "Bash(./src/DentScanComparePro:*)",
+      "Read(/KHKsData/**)",
+      "Bash(ls /KHKsData/*)"
+    ]
+  }
+}
