@@ -1830,11 +1830,17 @@ void MainWindow::onQCViewRequested(const QString& scanId, const QString& imagePa
         return;
     }
 
-    // Find GPA mean for this group
-    QString gpaMeanPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
-    if (!QFile::exists(gpaMeanPath)) {
+    // Find reference mesh for this group (try new naming first, then legacy)
+    QString refMeshPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
+    if (!QFile::exists(refMeshPath)) {
+        // Try legacy naming (pre-136d3e1)
+        refMeshPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+    }
+    if (!QFile::exists(refMeshPath)) {
         QMessageBox::warning(this, "Error",
-            QString("GPA mean not found: %1").arg(gpaMeanPath));
+            QString("Reference mesh not found. Looked for:\n- %1\n- %2")
+                .arg(outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl")
+                .arg(outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl"));
         return;
     }
 
@@ -1843,7 +1849,7 @@ void MainWindow::onQCViewRequested(const QString& scanId, const QString& imagePa
 
     // Open AlignmentQCDialog
     DentScanBatch::AlignmentQCDialog dialog(
-        record.filePath, gpaMeanPath, scanId, this);
+        record.filePath, refMeshPath, scanId, this);
 
     // Load meshes with transform
     if (!dialog.loadMeshes(transformPath)) {
@@ -1887,13 +1893,22 @@ void MainWindow::onQCReregisterRequested(const QString& scanId)
         return;
     }
 
-    // Find GPA mean for this group
-    QString gpaMeanPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
+    // Find reference mesh for this group (try new naming first, then legacy)
+    QString refMeshPath = outputDir + "/qc/reference_meshes/" + record.groupId + "_reference.stl";
+    if (!QFile::exists(refMeshPath)) {
+        // Try legacy naming (pre-136d3e1)
+        refMeshPath = outputDir + "/qc/gpa_means/" + record.groupId + "_gpa_mean.stl";
+    }
+    if (!QFile::exists(refMeshPath)) {
+        QMessageBox::warning(this, "Error",
+            QString("Reference mesh not found for group: %1").arg(record.groupId));
+        return;
+    }
 
     // Open errand resolution dialog
     qDebug() << "Creating ErrandResolutionDialog...";
     DentScanBatch::ErrandResolutionDialog dialog(
-        record.filePath, gpaMeanPath, scanId, this);
+        record.filePath, refMeshPath, scanId, this);
 
     qDebug() << "Calling dialog.exec()...";
     int result = dialog.exec();
@@ -1951,11 +1966,19 @@ void MainWindow::generateDifferenceImages()
         return;
     }
 
-    QDir gpaMeansDir(outputDir + "/qc/reference_meshes");
-    if (!gpaMeansDir.exists()) {
-        QMessageBox::warning(this, "No GPA Means",
-            "No GPA mean meshes found. Run batch processing first.");
-        return;
+    // Check for reference meshes (new naming) or legacy gpa_means directory
+    QDir refMeshDir(outputDir + "/qc/reference_meshes");
+    QDir legacyDir(outputDir + "/qc/gpa_means");
+    bool useLegacy = false;
+    if (!refMeshDir.exists()) {
+        if (legacyDir.exists()) {
+            refMeshDir = legacyDir;
+            useLegacy = true;
+        } else {
+            QMessageBox::warning(this, "No Reference Meshes",
+                "No reference meshes found. Run batch processing first.");
+            return;
+        }
     }
 
     // Get list of transform files
@@ -2037,23 +2060,26 @@ void MainWindow::generateDifferenceImages()
             p = Point3(transformed.x(), transformed.y(), transformed.z());
         }
 
-        // Load GPA mean (cached)
-        QString gpaMeanPath = gpaMeansDir.absoluteFilePath(groupId + "_reference.stl");
-        std::shared_ptr<ScanData> gpaMean;
+        // Load reference mesh (cached)
+        QString refMeshFilename = useLegacy
+            ? (groupId + "_gpa_mean.stl")
+            : (groupId + "_reference.stl");
+        QString refMeshPath = refMeshDir.absoluteFilePath(refMeshFilename);
+        std::shared_ptr<ScanData> refMesh;
 
         auto cacheIt = gpaMeanCache.find(groupId);
         if (cacheIt != gpaMeanCache.end()) {
-            gpaMean = cacheIt->second;
+            refMesh = cacheIt->second;
         } else {
-            gpaMean = STLReader::read(gpaMeanPath.toStdString(), errorMsg);
-            if (!gpaMean) {
+            refMesh = STLReader::read(refMeshPath.toStdString(), errorMsg);
+            if (!refMesh) {
                 continue;
             }
-            gpaMeanCache[groupId] = gpaMean;
+            gpaMeanCache[groupId] = refMesh;
         }
 
         // Compute distances
-        DistanceField::compute(*scanData, *gpaMean);
+        DistanceField::compute(*scanData, *refMesh);
 
         // Export difference image
         if (DentScanBatch::QCExporter::exportDifferenceImage(
