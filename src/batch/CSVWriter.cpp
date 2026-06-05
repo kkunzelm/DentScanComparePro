@@ -24,9 +24,15 @@ QString CSVWriter::escapeCSV(const QString& str) {
 }
 
 void CSVWriter::writeTruenessHeader(QTextStream& out) {
+    // Tessellation metrics
     out << "Observation_ID,Scanner_Model,SKD_Value,Repetition_ID,"
-        << "Trueness_RMS_mm,Trueness_MeanAbs_mm,Trueness_Max_mm,Trueness_P95_mm,"
-        << "Signed_Mean_mm,Coverage_Rate_pct,Vertices_Included,Vertices_Total,File_Path\n";
+        << "Triangles,Edge_mm,AspRatio,ATI,DensHighK,DensLowK,"
+        // Accuracy metrics
+        << "RMS_mm,MAD_mm,H100_mm,H95_mm,Bias_mm,"
+        // Completeness metrics
+        << "Coverage_pct,Boundary_mm,Holes,Stitch_deg,"
+        // Additional info
+        << "Vertices_Included,Vertices_Total,File_Path\n";
 }
 
 void CSVWriter::writePrecisionHeader(QTextStream& out) {
@@ -56,12 +62,25 @@ bool CSVWriter::writeTruenessCSV(
             << escapeCSV(QString::fromStdString(report.scannerName)) << ","
             << report.skd_mm << ","
             << report.repetitionId << ","
+            // Tessellation metrics
+            << report.triangleCount << ","
+            << QString::number(report.meanEdgeLength, 'f', 4) << ","
+            << QString::number(report.meanAspectRatio, 'f', 3) << ","
+            << QString::number(report.ati, 'f', 3) << ","
+            << QString::number(report.densityHighCurv, 'f', 2) << ","
+            << QString::number(report.densityLowCurv, 'f', 2) << ","
+            // Accuracy metrics
             << QString::number(report.rmsDistance, 'f', 4) << ","
             << QString::number(report.madDistance, 'f', 4) << ","
             << QString::number(report.hausdorff100, 'f', 4) << ","
             << QString::number(report.hausdorff95, 'f', 4) << ","
             << QString::number(report.signedMean, 'f', 4) << ","
+            // Completeness metrics
             << QString::number(report.coverageRate, 'f', 2) << ","
+            << QString::number(report.openBoundaryLength, 'f', 2) << ","
+            << report.holeCount << ","
+            << QString::number(report.maxStitchingAngle, 'f', 1) << ","
+            // Additional info
             << report.verticesIncluded << ","
             << report.verticesTotal << ","
             << escapeCSV(report.filePath) << "\n";
@@ -102,12 +121,25 @@ bool CSVWriter::appendTruenessCSV(
             << escapeCSV(QString::fromStdString(report.scannerName)) << ","
             << report.skd_mm << ","
             << report.repetitionId << ","
+            // Tessellation metrics
+            << report.triangleCount << ","
+            << QString::number(report.meanEdgeLength, 'f', 4) << ","
+            << QString::number(report.meanAspectRatio, 'f', 3) << ","
+            << QString::number(report.ati, 'f', 3) << ","
+            << QString::number(report.densityHighCurv, 'f', 2) << ","
+            << QString::number(report.densityLowCurv, 'f', 2) << ","
+            // Accuracy metrics
             << QString::number(report.rmsDistance, 'f', 4) << ","
             << QString::number(report.madDistance, 'f', 4) << ","
             << QString::number(report.hausdorff100, 'f', 4) << ","
             << QString::number(report.hausdorff95, 'f', 4) << ","
             << QString::number(report.signedMean, 'f', 4) << ","
+            // Completeness metrics
             << QString::number(report.coverageRate, 'f', 2) << ","
+            << QString::number(report.openBoundaryLength, 'f', 2) << ","
+            << report.holeCount << ","
+            << QString::number(report.maxStitchingAngle, 'f', 1) << ","
+            // Additional info
             << report.verticesIncluded << ","
             << report.verticesTotal << ","
             << escapeCSV(report.filePath) << "\n";

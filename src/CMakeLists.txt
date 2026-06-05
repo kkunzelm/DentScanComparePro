@@ -7,6 +7,8 @@ set(CORE_SOURCES
     core/DistanceField.cpp
     core/ToothSegmentation.cpp
     core/AlignmentTransformLoader.cpp
+    core/TessellationMetrics.cpp
+    core/ArchMetrics.cpp
 )
 
 # Visualization sources (reused from DentScanCompare)

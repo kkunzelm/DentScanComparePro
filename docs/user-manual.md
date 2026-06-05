@@ -314,16 +314,37 @@ Options:
 
 ## Understanding the Metrics
 
-### Trueness Metrics (per scan)
+For detailed metric interpretation, see **docs/metric-interpretation.md**.
 
-| Metric | Description |
-|--------|-------------|
-| **RMS** | Root Mean Square distance to reference (mm) |
-| **MAD** | Mean Absolute Distance (mm) |
-| **Max** | Maximum distance (Hausdorff 100%) |
-| **P95** | 95th percentile distance (Hausdorff 95%) |
-| **Signed Mean** | Mean signed distance (positive = scan outside reference) |
-| **Coverage** | Percentage of vertices within valid distance range |
+### Tessellation Quality Metrics (per scan, measured before registration)
+
+| Metric | CSV Column | Description |
+|--------|------------|-------------|
+| **Triangles** | `Triangles` | Total triangular faces in the mesh |
+| **Edge** | `Edge_mm` | Mean edge length (mm). Smaller = finer mesh |
+| **AspRatio** | `AspRatio` | Mean aspect ratio (longest/shortest edge). 1.0 = equilateral |
+| **ATI** | `ATI` | Adaptive Tessellation Index. Spearman correlation between curvature and 1/area. +1 = ideal adaptive, 0 = uniform |
+| **DensHighκ** | `DensHighK` | Triangle density in high-curvature zones (triangles/mm²) |
+| **DensLowκ** | `DensLowK` | Triangle density in low-curvature zones (triangles/mm²) |
+
+### Accuracy Metrics (per scan, after registration)
+
+| Metric | CSV Column | Description |
+|--------|------------|-------------|
+| **RMS** | `RMS_mm` | Root Mean Square distance to reference (mm). Primary accuracy metric |
+| **MAD** | `MAD_mm` | Median Absolute Deviation (mm). Robust to outliers |
+| **H100** | `H100_mm` | Maximum distance (Hausdorff 100%). Dominated by boundary artifacts |
+| **H95** | `H95_mm` | 95th percentile distance. Clinically meaningful: 95% of surface within this |
+| **Bias** | `Bias_mm` | Signed mean distance. Positive = scan outside reference (oversized) |
+
+### Completeness Metrics (per scan)
+
+| Metric | CSV Column | Description |
+|--------|------------|-------------|
+| **Coverage** | `Coverage_pct` | Percentage of vertices within 0.2 mm of reference |
+| **Boundary** | `Boundary_mm` | Total length of open boundary edges (mm) |
+| **Holes** | `Holes` | Number of topological holes (open boundary loops) |
+| **Stitch** | `Stitch_deg` | Maximum normal discontinuity angle (°). High values indicate stitching artifacts |
 
 ### Precision Metrics (per scanner per SKD)
 
@@ -342,14 +363,15 @@ The batch processor executes these stages for each SKD group:
 
 1. **Load STL files** - Parse binary STL into CGAL meshes
 2. **Compute curvature** - CGAL interpolated curvatures for segmentation
-3. **Compute Base Selection** (if ROI template provided) - Dijkstra-based segmentation from seeds
-4. **Apply pre-computed transforms** (if `--alignments` provided) - Load DentScanAlign results
-5. **Alignment** - GPA or ICP against external reference
+3. **Compute tessellation metrics** - ATI, edge length, aspect ratio, curvature densities
+4. **Compute Base Selection** (if ROI template provided) - Dijkstra-based segmentation from seeds
+5. **Apply pre-computed transforms** (if `--alignments` provided) - Load DentScanAlign results
+6. **Alignment** - GPA or ICP against external reference
    - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
-6. **Compute distances** - CGAL AABB-tree signed distances to reference
-7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage
-8. **Compute precision metrics** - Pairwise comparisons between repetitions
-9. **Export QC data** - GPA means, transforms, segmented meshes
+7. **Compute distances** - CGAL AABB-tree signed distances to reference
+8. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
+9. **Compute precision metrics** - Pairwise comparisons between repetitions
+10. **Export QC data** - GPA means, transforms, segmented meshes
 
 ---
 

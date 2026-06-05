@@ -5,6 +5,8 @@
 #include "../core/DistanceField.h"
 #include "../core/ToothSegmentation.h"
 #include "../core/AlignmentTransformLoader.h"
+#include "../core/TessellationMetrics.h"
+#include "../core/ArchMetrics.h"
 #include "../qc/QCExporter.h"
 #include <QFileInfo>
 #include <algorithm>
@@ -293,7 +295,7 @@ bool GroupProcessor::computeCurvature(
     std::vector<std::shared_ptr<ScanData>>& scans,
     GroupResult& result)
 {
-    emit progressUpdated(++m_currentStep, m_totalSteps, "Computing curvature");
+    emit progressUpdated(++m_currentStep, m_totalSteps, "Computing curvature and tessellation metrics");
     std::cout << "    Computing curvature..." << std::flush;
 
     for (auto& scan : scans) {
@@ -303,6 +305,16 @@ bool GroupProcessor::computeCurvature(
     }
 
     std::cout << " done\n" << std::flush;
+
+    // Compute tessellation metrics (requires curvature to be computed first)
+    std::cout << "    Computing tessellation metrics..." << std::flush;
+    for (auto& scan : scans) {
+        if (wasCancelled()) return false;
+        std::cout << "." << std::flush;
+        TessellationMetrics::compute(*scan);
+    }
+    std::cout << " done\n" << std::flush;
+
     return true;
 }
 
@@ -507,6 +519,13 @@ void GroupProcessor::computeTruenessMetrics(
         if (it != fileMap.end()) {
             report.repetitionId = it->second->repetitionId;
         }
+
+        // Fill tessellation metrics (ATI, edge length, aspect ratio, densities)
+        TessellationMetrics::fillReport(*scan, report);
+
+        // Fill arch/completeness metrics (boundary length, holes, stitching angle)
+        ArchMetrics::computeBoundaryMetrics(*scan, report);
+        ArchMetrics::computeStitchingArtifacts(*scan, report);
 
         // Compute occlusal Z for this scan
         double z_occlusal = computeOcclusalZ(scan->mesh);
