@@ -1,7 +1,56 @@
-# Ignore everything
-*
+# Build directories
+build/
+cmake-build-*/
+out/
 
-# Except these files
-!LICENSE
-!README.md
-!.gitignore
+# Qt Creator generated files
+*.user
+*.autosave
+CMakeLists.txt.user*
+
+# Compiled objects
+*.o
+*.obj
+*.moc
+*.rcc
+*.qm
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Libraries
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Cache and local settings
+.cache/
+.claude/
+
+# Root-level files to ignore (keep README.md, LICENSE, CMakeLists.txt)
+/CHANGELOG.md
+/CLAUDE.md
+/SKILLS.md
+/TODO.md
+
+# Scripts directory (internal analysis)
+/scripts/
+
+# Documentation (only public docs visible)
+docs/*
+!docs/user-manual.md
+!docs/metric-interpretation.md
