@@ -184,7 +184,7 @@ make -j4
 
 ## License
 
-This project is fully open-source and free to use under the **[GNU General Public License v2 (GPL v2)]** license. You are welcome to download, modify, and self-host it at no cost.
+This project is fully open-source and free to use under the **GNU General Public License v2 or later (GPL-2.0-or-later)**. You are welcome to download, modify, and self-host it at no cost. See the [LICENSE](LICENSE) file for details.
 
 
 ## Commercial Support, Consulting, and Training

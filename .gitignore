@@ -1,41 +1,7 @@
-# Build directories
-build/
-cmake-build-*/
-out/
+# Ignore everything
+*
 
-# Qt Creator generated files
-*.user
-*.autosave
-CMakeLists.txt.user*
-
-# Compiled objects
-*.o
-*.obj
-*.moc
-*.rcc
-*.qm
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Libraries
-*.a
-*.lib
-*.so
-*.so.*
-*.dylib
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*~
-
-# OS generated
-.DS_Store
-Thumbs.db
-
-# Claude Code local settings
-.claude/settings.local.json
+# Except these files
+!LICENSE
+!README.md
+!.gitignore
