@@ -7,7 +7,7 @@
 #
 # Important changes in v2:
 #   - Prevents the precision analysis from crashing.
-#   - Trueness data have 5 observations per Scanner x SKD cell, so the
+#  - Trueness data have 5 observations per Scanner x SKD cell, so the
 #     full model Outcome ~ Scanner * SKD is estimable.
 #   - Precision data have only 1 aggregated observation per Scanner x SKD cell,
 #     so the full interaction model is saturated. Precision outcomes are
@@ -16,26 +16,26 @@
 #   - Plots are produced before any optional long exploratory sections.
 #   - Plot files are saved by default to output/plots.
 # ============================================================
-
-# ----------------------------
-# 0. SETTINGS
-# ----------------------------
-# Optional: set this to your project directory if needed.
-setwd("//KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOSScannerComparison/results_DentScanComparePro_masked/")
-
-SAVE_PLOTS <- TRUE
-PLOT_ALL_TRUENESS_METRICS <- TRUE
-PLOT_PRECISION_METRICS <- TRUE
-RUN_POSTHOC_FOR_OTHER_TRUENESS_METRICS <- FALSE  # keeps console output readable
-PRINT_ALL_SCANNER_SKD_ROWS <- FALSE              # set TRUE to print all 36 Scanner x SKD rows
-
-# ----------------------------
-# 1. PACKAGES AND PATHS
-# ----------------------------
-required_packages <- c("tidyverse", "emmeans", "effectsize")
-for (pkg in required_packages) {
-  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
-}
+# 
+# # ----------------------------
+# # 0. SETTINGS
+# # ----------------------------
+# # Optional: set this to your project directory if needed.
+# setwd("/KHKsData/usr2/daten/P2026-Kessler-ScanVergleich/IOSScannerComparison/results_DentScanComparePro_masked/")
+# 
+# SAVE_PLOTS <- TRUE
+# PLOT_ALL_TRUENESS_METRICS <- TRUE
+# PLOT_PRECISION_METRICS <- TRUE
+# RUN_POSTHOC_FOR_OTHER_TRUENESS_METRICS <- FALSE  # keeps console output readable
+# PRINT_ALL_SCANNER_SKD_ROWS <- FALSE              # set TRUE to print all 36 Scanner x SKD rows
+# 
+# # ----------------------------
+# # 1. PACKAGES AND PATHS
+# # ----------------------------
+# required_packages <- c("tidyverse", "emmeans", "effectsize")
+# for (pkg in required_packages) {
+#   if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+# }
 
 library(tidyverse)
 library(emmeans)
