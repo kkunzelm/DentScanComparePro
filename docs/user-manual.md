@@ -334,8 +334,9 @@ Scans flagged as errands can be re-registered using manually placed landmarks. T
 
 **Workflow:**
 
-1. In the QC Review grid, right-click (or use the context menu) on a red-bordered thumbnail and choose **Re-register**
-2. The **Errand Resolution Dialog** opens with three panels:
+1. In the QC Review grid, **click** each scan you want to re-register to select it (selected scans get a blue border). You can select individual problem scans, or use **Flag as Errand** first and then select all red-bordered scans.
+2. Click **Re-align Selected** (orange button in the toolbar). The dialog will open for each selected scan in sequence.
+3. The **Errand Resolution Dialog** opens with three panels:
    - **Left panel**: GPA reference mesh (the group's mean)
    - **Middle panel**: the failing scan in its original coordinate frame
    - **Right panel**: distance map (shown after alignment)

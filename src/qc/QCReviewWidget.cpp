@@ -229,6 +229,13 @@ void QCReviewWidget::setupUI()
     connect(m_flagSelectedBtn, &QPushButton::clicked, this, &QCReviewWidget::flagSelectedAsErrands);
     toolbar->addWidget(m_flagSelectedBtn);
 
+    m_reregisterSelectedBtn = new QPushButton("Re-align Selected", this);
+    m_reregisterSelectedBtn->setStyleSheet("background-color: #e65100; color: white;");
+    m_reregisterSelectedBtn->setToolTip("Open the re-alignment dialog for each selected scan in sequence");
+    connect(m_reregisterSelectedBtn, &QPushButton::clicked,
+            this, &QCReviewWidget::reregisterSelectedErrands);
+    toolbar->addWidget(m_reregisterSelectedBtn);
+
     m_saveBtn = new QPushButton("Save QC Status", this);
     connect(m_saveBtn, &QPushButton::clicked, this, &QCReviewWidget::saveStatus);
     toolbar->addWidget(m_saveBtn);
@@ -478,6 +485,20 @@ void QCReviewWidget::acceptAllVisible()
     }
     updateStatusCounts();
     emit statusChanged();
+}
+
+void QCReviewWidget::reregisterSelectedErrands()
+{
+    if (m_selectedIds.empty()) {
+        QMessageBox::information(this, "Re-align", "No scans selected. Click thumbnails to select.");
+        return;
+    }
+
+    QStringList ids;
+    for (const QString& id : m_selectedIds) {
+        ids << id;
+    }
+    emit batchReregisterRequested(ids);
 }
 
 void QCReviewWidget::flagSelectedAsErrands()

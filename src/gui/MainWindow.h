@@ -96,6 +96,7 @@ private slots:
     void rebuildMetricsFromTransforms();
     void onQCViewRequested(const QString& scanId, const QString& imagePath);
     void onQCReregisterRequested(const QString& scanId);
+    void onQCBatchReregisterRequested(const QStringList& scanIds);
     void onQCStatusChanged();
     void onQCSaveRequested();
 

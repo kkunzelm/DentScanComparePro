@@ -1847,6 +1847,8 @@ void MainWindow::setupQCReviewTab()
             this, &MainWindow::onQCViewRequested);
     connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::reregisterRequested,
             this, &MainWindow::onQCReregisterRequested);
+    connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::batchReregisterRequested,
+            this, &MainWindow::onQCBatchReregisterRequested);
     connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::statusChanged,
             this, &MainWindow::onQCStatusChanged);
     connect(m_qcReviewWidget, &DentScanBatch::QCReviewWidget::saveRequested,
@@ -2016,6 +2018,25 @@ void MainWindow::onQCReregisterRequested(const QString& scanId)
         });
     }
     qDebug() << "onQCReregisterRequested() complete";
+}
+
+void MainWindow::onQCBatchReregisterRequested(const QStringList& scanIds)
+{
+    if (scanIds.isEmpty()) return;
+
+    int completed = 0;
+    for (const QString& scanId : scanIds) {
+        m_statusLabel->setText(QString("Re-aligning %1 (%2 of %3)...")
+            .arg(scanId).arg(completed + 1).arg(scanIds.size()));
+        QApplication::processEvents();
+
+        onQCReregisterRequested(scanId);
+        ++completed;
+    }
+
+    m_statusLabel->setText(QString("Re-alignment done for %1 scan(s). "
+                                   "Run 'Rebuild Metrics from Transforms' to update CSVs.")
+        .arg(completed));
 }
 
 void MainWindow::onQCStatusChanged()

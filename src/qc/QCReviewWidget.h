@@ -133,6 +133,12 @@ signals:
     void reregisterRequested(const QString& scanId);
 
     /**
+     * Emitted when user wants to re-register multiple selected scans.
+     * @param scanIds List of scan identifiers (in display order)
+     */
+    void batchReregisterRequested(const QStringList& scanIds);
+
+    /**
      * Emitted when QC status changes.
      */
     void statusChanged();
@@ -152,6 +158,11 @@ public slots:
      * Flag selected scans as errands.
      */
     void flagSelectedAsErrands();
+
+    /**
+     * Start re-registration dialog for each selected scan in sequence.
+     */
+    void reregisterSelectedErrands();
 
     /**
      * Accept selected scans.
@@ -202,6 +213,7 @@ private:
     QPushButton* m_acceptAllBtn = nullptr;
     QPushButton* m_clearSelectionBtn = nullptr;
     QPushButton* m_flagSelectedBtn = nullptr;
+    QPushButton* m_reregisterSelectedBtn = nullptr;
     QPushButton* m_acceptSelectedBtn = nullptr;
     QPushButton* m_saveBtn = nullptr;
 };
