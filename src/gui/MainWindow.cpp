@@ -1821,6 +1821,12 @@ void MainWindow::setupQCReviewTab()
     connect(genImagesBtn, &QPushButton::clicked, this, &MainWindow::generateDifferenceImages);
     loadRow->addWidget(genImagesBtn);
 
+    m_qcApplyROIChk = new QCheckBox("Apply ROI template");
+    m_qcApplyROIChk->setToolTip(
+        "When checked, vertices outside the ROI template are shown in grey.\n"
+        "Existing images are regenerated. Requires an ROI template to be set.");
+    loadRow->addWidget(m_qcApplyROIChk);
+
     loadRow->addStretch();
     layout->addLayout(loadRow);
 
@@ -2034,6 +2040,20 @@ void MainWindow::generateDifferenceImages()
     // Enable image export (was disabled in batch mode)
     DentScanBatch::QCExporter::setImageExportEnabled(true);
 
+    // Load ROI template if the checkbox is checked
+    const bool applyROI = m_qcApplyROIChk && m_qcApplyROIChk->isChecked();
+    std::optional<DentScanBatch::ROITemplate> roiTemplate;
+    if (applyROI) {
+        QString roiPath = m_roiTemplateEdit->text().trimmed();
+        if (roiPath.isEmpty() || !QFile::exists(roiPath)) {
+            QMessageBox::warning(this, "No ROI Template",
+                "Apply ROI is checked but no valid ROI template file is set.\n"
+                "Please set the ROI template path in the Batch Configuration tab.");
+            return;
+        }
+        roiTemplate = DentScanBatch::ROITemplate::loadFromFile(roiPath);
+    }
+
     // Progress dialog
     QProgressDialog progress("Generating difference images...", "Cancel", 0, jsonFiles.size(), this);
     progress.setWindowModality(Qt::WindowModal);
@@ -2058,9 +2078,9 @@ void MainWindow::generateDifferenceImages()
             .arg(scanId).arg(i + 1).arg(jsonFiles.size()));
         QApplication::processEvents();
 
-        // Check if image already exists
+        // Skip existing images only when not applying ROI (ROI mode always regenerates)
         QString imagePath = outputDir + "/qc/difference_images/" + scanId + ".png";
-        if (QFile::exists(imagePath)) {
+        if (!applyROI && QFile::exists(imagePath)) {
             skipped++;
             continue;
         }
@@ -2127,9 +2147,24 @@ void MainWindow::generateDifferenceImages()
         // Compute distances using cached tree (much faster than rebuilding tree each time)
         treeIt->second->computeDistances(*scanData);
 
+        // Build ROI mask if requested (out-of-ROI vertices rendered grey)
+        std::vector<bool> roiMask;
+        if (applyROI && roiTemplate.has_value()) {
+            const DentScanBatch::ROIConfig& roi = roiTemplate->roi;
+            double maxZ = std::numeric_limits<double>::lowest();
+            for (auto v : scanData->mesh.vertices())
+                maxZ = std::max(maxZ, scanData->mesh.point(v).z());
+
+            roiMask.reserve(scanData->mesh.number_of_vertices());
+            for (auto v : scanData->mesh.vertices()) {
+                const Point3& p = scanData->mesh.point(v);
+                roiMask.push_back(roi.isInROI(p.x(), p.y(), p.z(), maxZ));
+            }
+        }
+
         // Export difference image
         if (DentScanBatch::QCExporter::exportDifferenceImage(
-                scanData, outputDir, scanId, -0.5, 0.5)) {
+                scanData, outputDir, scanId, -0.5, 0.5, roiMask)) {
             generated++;
         }
     }

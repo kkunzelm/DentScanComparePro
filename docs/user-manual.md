@@ -336,6 +336,67 @@ Poor registrations can corrupt your statistics. Use the QC workflow to verify al
 
 ---
 
+### Understanding How Difference Images Are Generated
+
+#### The Two-Phase Pipeline
+
+It is important to understand that difference image generation is architecturally separated from batch metric computation. These are two independent pipelines that run at different times and are connected only through files written to disk.
+
+**Phase 1 — Batch processing (metric computation):**
+
+During batch processing, the application computes all alignments and metrics entirely in memory. VTK rendering is explicitly disabled in this phase because offscreen VTK rendering is not reliable in a background thread. As a result, no difference images are produced during the batch run. What is written to disk is:
+
+- The GPA mean reference mesh for each SKD group (`qc/reference_meshes/{groupId}_reference.stl`)
+- A small JSON file per scan (`qc/transforms/{scanId}.json`) containing the 4×4 alignment matrix and the final RMS value
+
+Crucially, the per-vertex distance arrays (which would be needed to color the mesh) are **not** saved to disk. They are computed and used for statistics, then discarded.
+
+**Phase 2 — Difference image generation (QC tab):**
+
+When you click **Generate Difference Images** in the QC Review tab, a completely separate rendering pipeline is executed. For each scan, it:
+
+1. Reloads the original STL file from disk
+2. Reads the saved 4×4 alignment transform from the corresponding JSON file
+3. Applies that transform to the mesh vertices in memory
+4. Rebuilds the AABB reference tree from the saved reference mesh
+5. Recomputes per-vertex signed distances from scratch
+6. Renders the colored mesh to a PNG file using VTK offscreen rendering
+
+This means the correct workflow is always: **run batch processing first, then go to the QC tab to generate difference images.** The QC tab will not work unless batch processing has previously completed and written its QC data to disk.
+
+#### Why Difference Images Previously Showed the Full Mesh
+
+Because Phase 2 recomputes distances independently, it had no knowledge of the ROI template that was used during batch processing. The distances were computed for every vertex of every scan, and the resulting color map covered the entire mesh surface — including gingiva, scan borders, and other regions that were explicitly excluded from the metric calculations.
+
+This created a misleading situation: the CSV metrics correctly reflected only the tooth surfaces included in the ROI, but the difference images visually showed the full scan, making it appear as if larger or noisier regions were contributing to the numbers.
+
+#### The "Apply ROI Template" Checkbox
+
+To close this gap, the QC tab now includes an **"Apply ROI template"** checkbox next to the Generate button.
+
+**When unchecked (default):** Behavior is unchanged from before. Distances are computed on the full mesh and every vertex is colored by its signed distance to the reference. Existing images are skipped (not regenerated). This mode is useful for a quick visual check of the overall scan alignment.
+
+**When checked:** The application loads the ROI template currently set in the Batch Configuration tab and builds the same per-vertex inclusion mask that the batch processor used when computing metrics. Vertices that fall inside the ROI are colored normally by their signed distance value (blue–white–red diverging scale). Vertices that fall outside the ROI are rendered in dark grey, making the boundary of the analysis region immediately visible. Additionally, when this mode is active, **existing images are always regenerated** — the "skip if already exists" optimization is bypassed, because the user has explicitly requested a different rendering.
+
+**Important:** The ROI mask applied here is the geometric part of the ROI only — bounding box, plane slab, and brush override zones. The tooth segmentation base selection (which is scan-specific and not stored in the transform JSON) is not re-applied in this phase. If your metric ROI relied primarily on the base selection, the grey-vs-colored boundary in the images will not perfectly match the metric boundary, but it will still correctly reflect all spatial constraints (box, slab, brush zones).
+
+**Prerequisite:** The ROI template file path must be set in the **Batch Configuration** tab (the same path used during the batch run). If the field is empty or the file does not exist, the button will show a warning and abort.
+
+#### Summary: What the ROI Affects and Where
+
+| Pipeline stage | ROI template applied | Notes |
+|---|---|---|
+| ICP alignment (batch) | Yes — when "Use ROI mask" is checked | Only ROI vertices guide the alignment |
+| Distance computation (batch) | No | Distances computed for all vertices always |
+| Trueness metrics (batch) | Yes | Only ROI vertices contribute to RMS, MAD, H95, etc. |
+| Precision metrics (batch) | Yes | Only ROI vertices contribute to pairwise RMS |
+| Distance computation (QC image generation) | No | Distances recomputed for all vertices |
+| Difference image coloring (QC) | Only when "Apply ROI template" is checked | Out-of-ROI vertices shown in grey |
+
+The key takeaway is that the CSV metrics are always computed on the ROI-filtered vertex set, regardless of how the images look. The images are a visualization aid, not the source of the numbers. Checking "Apply ROI template" makes the images consistent with the metric computation and is the recommended setting when presenting results or checking whether the ROI was applied as intended.
+
+---
+
 ## CLI Reference
 
 ```

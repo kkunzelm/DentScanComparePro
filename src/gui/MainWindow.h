@@ -228,4 +228,5 @@ private:
     // Tab 5: QC Review
     QWidget* m_qcTab = nullptr;
     DentScanBatch::QCReviewWidget* m_qcReviewWidget = nullptr;
+    class QCheckBox* m_qcApplyROIChk = nullptr;
 };
