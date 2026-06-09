@@ -7,6 +7,7 @@
 #include "ErrandManager.h"
 #include "../core/Mesh.h"
 #include "../visualization/VTKMeshWidget.h"
+#include <Eigen/Core>
 #include <QDialog>
 #include <QLabel>
 #include <QPushButton>
@@ -73,6 +74,14 @@ public:
      * Get the new RMS distance after correction.
      */
     double newRMS() const { return m_newRMS; }
+
+    /**
+     * Get the corrected 4x4 transform applied to the scan.
+     */
+    Eigen::Matrix4d correctedTransform() const
+    {
+        return m_scan ? m_scan->transform : Eigen::Matrix4d::Identity();
+    }
 
 private slots:
     void onScanPointPicked(double x, double y, double z);

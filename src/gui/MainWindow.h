@@ -93,6 +93,7 @@ private slots:
     // QC Review
     void loadQCData();
     void generateDifferenceImages();
+    void rebuildMetricsFromTransforms();
     void onQCViewRequested(const QString& scanId, const QString& imagePath);
     void onQCReregisterRequested(const QString& scanId);
     void onQCStatusChanged();
@@ -229,4 +230,5 @@ private:
     QWidget* m_qcTab = nullptr;
     DentScanBatch::QCReviewWidget* m_qcReviewWidget = nullptr;
     class QCheckBox* m_qcApplyROIChk = nullptr;
+    QPushButton* m_rebuildMetricsBtn = nullptr;
 };

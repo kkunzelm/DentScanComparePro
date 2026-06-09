@@ -40,6 +40,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -1827,6 +1828,14 @@ void MainWindow::setupQCReviewTab()
         "Existing images are regenerated. Requires an ROI template to be set.");
     loadRow->addWidget(m_qcApplyROIChk);
 
+    m_rebuildMetricsBtn = new QPushButton("Rebuild Metrics from Transforms");
+    m_rebuildMetricsBtn->setToolTip(
+        "Re-read all qc/transforms/*.json files and rewrite the trueness,\n"
+        "precision, and summary CSVs. Run this after re-registering errands.");
+    connect(m_rebuildMetricsBtn, &QPushButton::clicked,
+            this, &MainWindow::rebuildMetricsFromTransforms);
+    loadRow->addWidget(m_rebuildMetricsBtn);
+
     loadRow->addStretch();
     layout->addLayout(loadRow);
 
@@ -1970,20 +1979,38 @@ void MainWindow::onQCReregisterRequested(const QString& scanId)
 
     if (result == QDialog::Accepted && dialog.wasAccepted()) {
         qDebug() << "Dialog accepted, updating errand manager...";
-        // Update errand manager with corrected metrics
+
+        // Overwrite the transform JSON with corrected transform + metrics
+        {
+            auto metrics = dialog.correctedMetrics();
+            metrics.filePath = record.filePath;
+            metrics.groupId  = record.groupId;
+
+            // Build a minimal ScanData carrying only the corrected transform
+            auto scanProxy = std::make_shared<ScanData>();
+            scanProxy->transform = dialog.correctedTransform();
+
+            if (!DentScanBatch::QCExporter::exportTransform(
+                    scanProxy, metrics, outputDir, scanId)) {
+                QMessageBox::warning(this, "Warning",
+                    QString("Could not overwrite transform JSON for %1.\n"
+                            "Rebuild metrics manually if needed.").arg(scanId));
+            }
+        }
+
+        // Update errand manager status
         m_qcReviewWidget->errandManager().markResolved(
             scanId, dialog.newRMS(), "landmark");
 
-        // Store values for deferred refresh
         double newRMS = dialog.newRMS();
         QString sid = scanId;
 
         qDebug() << "Deferring QC review refresh...";
-        // Defer the refresh to allow VTK to fully cleanup
         QTimer::singleShot(100, this, [this, sid, newRMS]() {
             qDebug() << "Refreshing QC review (deferred)...";
             m_qcReviewWidget->refresh();
-            m_statusLabel->setText(QString("Scan %1 re-registered. New RMS: %2 mm")
+            m_statusLabel->setText(QString("Scan %1 re-registered. New RMS: %2 mm. "
+                                           "Run 'Rebuild Metrics from Transforms' to update CSVs.")
                 .arg(sid).arg(newRMS, 0, 'f', 3));
             qDebug() << "Refresh complete";
         });
@@ -1999,6 +2026,30 @@ void MainWindow::onQCStatusChanged()
 void MainWindow::onQCSaveRequested()
 {
     m_statusLabel->setText("QC status saved.");
+}
+
+static bool imageMetaMatchesROI(const QString& metaPath, const QString& roiPath)
+{
+    QFile f(metaPath);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    if (!doc.isObject()) return false;
+    QJsonObject obj = doc.object();
+    if (obj["roi_path"].toString() != roiPath) return false;
+    qint64 stored  = obj["roi_mtime"].toVariant().toLongLong();
+    qint64 current = QFileInfo(roiPath).lastModified().toMSecsSinceEpoch();
+    return stored == current;
+}
+
+static void writeImageMeta(const QString& metaPath, const QString& roiPath)
+{
+    QJsonObject obj;
+    obj["roi_path"] = roiPath;
+    if (!roiPath.isEmpty())
+        obj["roi_mtime"] = QFileInfo(roiPath).lastModified().toMSecsSinceEpoch();
+    QFile f(metaPath);
+    if (f.open(QIODevice::WriteOnly))
+        f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
 void MainWindow::generateDifferenceImages()
@@ -2078,11 +2129,13 @@ void MainWindow::generateDifferenceImages()
             .arg(scanId).arg(i + 1).arg(jsonFiles.size()));
         QApplication::processEvents();
 
-        // Skip existing images only when not applying ROI (ROI mode always regenerates)
         QString imagePath = outputDir + "/qc/difference_images/" + scanId + ".png";
-        if (!applyROI && QFile::exists(imagePath)) {
-            skipped++;
-            continue;
+        QString metaPath  = outputDir + "/qc/difference_images/" + scanId + ".meta";
+        if (QFile::exists(imagePath)) {
+            if (!applyROI || imageMetaMatchesROI(metaPath, m_roiTemplateEdit->text().trimmed())) {
+                skipped++;
+                continue;
+            }
         }
 
         // Load transform JSON
@@ -2166,6 +2219,7 @@ void MainWindow::generateDifferenceImages()
         if (DentScanBatch::QCExporter::exportDifferenceImage(
                 scanData, outputDir, scanId, -0.5, 0.5, roiMask)) {
             generated++;
+            writeImageMeta(metaPath, applyROI ? m_roiTemplateEdit->text().trimmed() : QString());
         }
     }
 
@@ -2180,4 +2234,280 @@ void MainWindow::generateDifferenceImages()
     QMessageBox::information(this, "Complete",
         QString("Generated %1 difference images.\nSkipped %2 (already exist).")
         .arg(generated).arg(skipped));
+}
+
+// ---------------------------------------------------------------------------
+// Rebuild all metric CSVs from the saved qc/transforms/*.json files.
+//
+// Trueness metrics: read directly from JSON (no STL reload needed).
+// Precision metrics: reload original STLs, apply stored transforms, compute
+//   pairwise distances within each scanner group.  No tooth masks are applied
+//   (they are not stored in the JSON); geometric ROI from the currently loaded
+//   study config is used when available.
+// ---------------------------------------------------------------------------
+void MainWindow::rebuildMetricsFromTransforms()
+{
+    QString outputDir = m_outputDirEdit->text();
+    if (outputDir.isEmpty()) outputDir = "./results";
+
+    QDir transformDir(outputDir + "/qc/transforms");
+    if (!transformDir.exists()) {
+        QMessageBox::warning(this, "No Transform Data",
+            "No qc/transforms directory found. Run batch processing first.");
+        return;
+    }
+
+    QStringList jsonFiles = transformDir.entryList({"*.json"}, QDir::Files);
+    if (jsonFiles.isEmpty()) {
+        QMessageBox::warning(this, "No Transforms", "No transform JSON files found.");
+        return;
+    }
+
+    // Get QC errand status so we can build the filtered trueness CSV
+    QStringList errandIds = m_qcReviewWidget->errandManager().getErrandIds();
+    QSet<QString> errandSet(errandIds.begin(), errandIds.end());
+
+    // --- Phase 1: parse all JSONs into BatchMetricReport + transform --------
+
+    struct ScanEntry {
+        DentScanBatch::BatchMetricReport metrics;
+        Eigen::Matrix4d                  transform;
+    };
+
+    QProgressDialog progress("Reading transform files…", "Cancel",
+                             0, jsonFiles.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+
+    std::vector<ScanEntry> entries;
+    entries.reserve(static_cast<std::size_t>(jsonFiles.size()));
+
+    for (int i = 0; i < jsonFiles.size(); ++i) {
+        if (progress.wasCanceled()) return;
+        progress.setValue(i);
+
+        QFile f(transformDir.absoluteFilePath(jsonFiles[i]));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+        if (!doc.isObject()) continue;
+        QJsonObject obj = doc.object();
+
+        ScanEntry e;
+
+        // Transform matrix
+        QJsonArray ta = obj["transform"].toArray();
+        e.transform = Eigen::Matrix4d::Identity();
+        for (int r = 0; r < 4 && r < ta.size(); ++r) {
+            QJsonArray row = ta[r].toArray();
+            for (int c = 0; c < 4 && c < row.size(); ++c)
+                e.transform(r, c) = row[c].toDouble();
+        }
+
+        // Identification
+        e.metrics.scannerName = obj["scanner"].toString().toStdString();
+        e.metrics.groupId     = obj["group"].toString();
+        e.metrics.skd_mm      = obj["skd_mm"].toInt();
+        e.metrics.repetitionId= obj["repetition"].toInt();
+        e.metrics.filePath    = obj["file_path"].toString();
+
+        // Per-scan trueness metrics stored directly in JSON
+        QJsonObject m = obj["metrics"].toObject();
+        e.metrics.rmsDistance       = m["rms_mm"].toDouble();
+        e.metrics.madDistance       = m["mad_mm"].toDouble();
+        e.metrics.hausdorff95       = m["hausdorff95_mm"].toDouble();
+        e.metrics.hausdorff100      = m["hausdorff100_mm"].toDouble();
+        e.metrics.signedMean        = m["signed_mean_mm"].toDouble();
+        e.metrics.coverageRate      = m["coverage_pct"].toDouble();
+        e.metrics.verticesIncluded  = static_cast<std::size_t>(
+                                          m["vertices_included"].toVariant().toLongLong());
+        e.metrics.verticesTotal     = static_cast<std::size_t>(
+                                          m["vertices_total"].toVariant().toLongLong());
+
+        entries.push_back(std::move(e));
+    }
+    progress.setValue(jsonFiles.size());
+
+    if (entries.empty()) {
+        QMessageBox::warning(this, "Parse Error", "Could not parse any transform JSON files.");
+        return;
+    }
+
+    // --- Phase 2: write trueness CSVs (no mesh loading required) ------------
+
+    std::vector<DentScanBatch::BatchMetricReport> allReports;
+    allReports.reserve(entries.size());
+    for (const auto& e : entries) allReports.push_back(e.metrics);
+
+    QStringList csvErrors = DentScanBatch::CSVWriter::writeTruenessWithQCFilter(
+        allReports, outputDir, errandIds);
+
+    // Also overwrite the full long-format metrics file
+    DentScanBatch::CSVWriter::writeTruenessCSV(
+        allReports, outputDir + "/long_format_metrics.csv");
+
+    // --- Phase 3: precision — reload STLs, apply transforms, pairwise RMS ---
+
+    // Group entries by groupId
+    std::map<QString, std::vector<const ScanEntry*>> byGroup;
+    for (const auto& e : entries)
+        byGroup[e.metrics.groupId].push_back(&e);
+
+    // Collect ROI configs from loaded study config (keyed by group id)
+    std::map<QString, DentScanBatch::ROIConfig> roiByGroup;
+    if (m_configLoaded) {
+        for (const auto& grp : m_studyConfig.groups)
+            roiByGroup[grp.id] = grp.roi;
+    }
+
+    std::vector<DentScanBatch::PrecisionReport> allPrecision;
+
+    QProgressDialog precProgress("Computing precision metrics…", "Cancel",
+                                  0, static_cast<int>(byGroup.size()), this);
+    precProgress.setWindowModality(Qt::WindowModal);
+    precProgress.setMinimumDuration(0);
+    int groupIdx = 0;
+
+    for (const auto& [groupId, groupEntries] : byGroup) {
+        if (precProgress.wasCanceled()) break;
+        precProgress.setValue(groupIdx++);
+        precProgress.setLabelText(QString("Precision: %1 (%2 scans)…")
+            .arg(groupId).arg(groupEntries.size()));
+        QApplication::processEvents();
+
+        // Load and align all scans in this group
+        struct AlignedScan {
+            std::shared_ptr<ScanData> data;
+            std::string scannerId;
+        };
+        std::vector<AlignedScan> alignedScans;
+        alignedScans.reserve(groupEntries.size());
+
+        std::string loadError;
+        for (const auto* ep : groupEntries) {
+            // Skip errands — they shouldn't affect precision
+            QString scanId = DentScanBatch::QCExporter::makeScanFilename(
+                QString::fromStdString(ep->metrics.scannerName),
+                ep->metrics.groupId,
+                ep->metrics.repetitionId);
+            if (errandSet.contains(scanId)) continue;
+
+            auto scan = STLReader::read(ep->metrics.filePath.toStdString(), loadError);
+            if (!scan) continue;
+
+            // Apply stored transform
+            for (auto v : scan->mesh.vertices()) {
+                Point3& p = scan->mesh.point(v);
+                Eigen::Vector4d pt(p.x(), p.y(), p.z(), 1.0);
+                Eigen::Vector4d tp = ep->transform * pt;
+                p = Point3(tp.x(), tp.y(), tp.z());
+            }
+            scan->scannerName = ep->metrics.scannerName;
+            AlignedScan as;
+            as.data      = scan;
+            as.scannerId = ep->metrics.scannerName;
+            alignedScans.push_back(std::move(as));
+        }
+
+        if (alignedScans.size() < 2) continue;
+
+        // Get ROI for this group (or empty = all vertices)
+        DentScanBatch::ROIConfig roi;
+        auto roiIt = roiByGroup.find(groupId);
+        if (roiIt != roiByGroup.end()) roi = roiIt->second;
+
+        // Group by scanner within this SKD group
+        std::map<std::string, std::vector<std::shared_ptr<ScanData>>> byScanner;
+        for (const auto& as : alignedScans)
+            byScanner[as.scannerId].push_back(as.data);
+
+        int skd = groupEntries.empty() ? 0 : groupEntries[0]->metrics.skd_mm;
+
+        for (const auto& [scannerId, scannerScans] : byScanner) {
+            if (scannerScans.size() < 2) continue;
+
+            // Build one AABB tree per scan, reuse across pairs (O(N) trees)
+            std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees;
+            trees.reserve(scannerScans.size());
+            for (const auto& s : scannerScans)
+                trees.push_back(std::make_unique<DistanceField::ReferenceTree>(s->mesh));
+
+            std::vector<double> pairwiseRMS;
+
+            for (std::size_t i = 0; i < scannerScans.size(); ++i) {
+                for (std::size_t j = i + 1; j < scannerScans.size(); ++j) {
+                    std::vector<double> dists =
+                        trees[j]->computePairwiseDistances(scannerScans[i]->mesh);
+                    if (dists.empty()) continue;
+
+                    // Build ROI mask using maxZ of scan i
+                    const auto& mesh = scannerScans[i]->mesh;
+                    double maxZ = std::numeric_limits<double>::lowest();
+                    for (auto v : mesh.vertices())
+                        maxZ = std::max(maxZ, mesh.point(v).z());
+
+                    double sq = 0.0;
+                    std::size_t cnt = 0;
+                    std::size_t vi = 0;
+                    for (auto v : mesh.vertices()) {
+                        if (vi >= dists.size()) break;
+                        const Point3& p = mesh.point(v);
+                        // ROIConfig::isInROI returns true for all inactive sub-filters,
+                        // so no separate isActive() guard is needed.
+                        bool inROI = roi.isInROI(p.x(), p.y(), p.z(), maxZ);
+                        if (inROI) {
+                            sq += dists[vi] * dists[vi];
+                            ++cnt;
+                        }
+                        ++vi;
+                    }
+                    if (cnt > 0)
+                        pairwiseRMS.push_back(std::sqrt(sq / cnt));
+                }
+            }
+
+            if (pairwiseRMS.empty()) continue;
+
+            DentScanBatch::PrecisionReport rep;
+            rep.scannerId    = QString::fromStdString(scannerId);
+            rep.groupId      = groupId;
+            rep.skd_mm       = skd;
+            rep.pairwiseCount= static_cast<int>(pairwiseRMS.size());
+            rep.meanRMS      = std::accumulate(pairwiseRMS.begin(),
+                                               pairwiseRMS.end(), 0.0)
+                               / pairwiseRMS.size();
+            if (pairwiseRMS.size() > 1) {
+                double sq2 = 0.0;
+                for (double r : pairwiseRMS)
+                    sq2 += (r - rep.meanRMS) * (r - rep.meanRMS);
+                rep.sdRMS = std::sqrt(sq2 / (pairwiseRMS.size() - 1));
+                rep.cv    = rep.meanRMS > 0 ? rep.sdRMS / rep.meanRMS : 0.0;
+            }
+            allPrecision.push_back(rep);
+        }
+    }
+    precProgress.setValue(static_cast<int>(byGroup.size()));
+
+    DentScanBatch::CSVWriter::writePrecisionCSV(
+        allPrecision, outputDir + "/precision_matrix.csv");
+    DentScanBatch::CSVWriter::writeSummaryCSV(
+        allReports, outputDir + "/summary_by_scanner_skd.csv");
+
+    QString msg = QString("Rebuilt metrics from %1 scans (%2 errands excluded).\n"
+                          "Precision recomputed for %3 scanner×SKD groups.\n"
+                          "Files updated:\n"
+                          "  long_format_metrics.csv\n"
+                          "  trueness_metrics_all.csv\n"
+                          "  trueness_metrics.csv\n"
+                          "  precision_matrix.csv\n"
+                          "  summary_by_scanner_skd.csv")
+        .arg(entries.size())
+        .arg(errandIds.size())
+        .arg(allPrecision.size());
+
+    if (!csvErrors.isEmpty())
+        msg += "\n\nWarnings:\n" + csvErrors.join("\n");
+
+    QMessageBox::information(this, "Rebuild Complete", msg);
+    m_statusLabel->setText(QString("Metrics rebuilt from %1 transform files.")
+        .arg(entries.size()));
 }

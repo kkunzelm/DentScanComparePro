@@ -312,27 +312,80 @@ GUI: uncheck **"Scans are normalized"**, check **"Scans are pre-aligned, use JSO
 
 ### Step 6: Quality Control Review
 
-Poor registrations can corrupt your statistics. Use the QC workflow to verify alignments.
+Poor registrations can corrupt your statistics. The QC workflow has two sub-phases: reviewing alignments and, if needed, re-registering failed scans and rebuilding the metric files.
 
-**In GUI Mode:**
+#### 6a — Review Thumbnails
 
 1. Go to **QC Review** tab
 2. Click **Load QC Data from Results**
-3. Review thumbnails:
+3. Click **Generate Difference Images** to render color-coded distance maps (see section below for options)
+4. Review thumbnails:
    - **Green border** = Accepted
-   - **Red border** = Flagged as errand
-   - **Yellow border** = Statistical outlier (RMS > mean + 2σ)
+   - **Red border** = Flagged as errand (registration failure)
+   - **Yellow border** = Statistical outlier (RMS > mean + 2σ) — review these first
    - **Grey border** = Pending review
-4. **Double-click** a thumbnail to open detailed view:
-   - See reference mesh (grey wireframe) + scan (distance colored)
-   - View metrics (RMS, Max, Coverage)
-   - Click **Accept**, **Flag as Errand**, or **Skip**
-5. For flagged scans, use **ErrandResolutionDialog** to manually re-register:
-   - Pick 3+ corresponding landmarks on reference and scan
-   - Click **Compute Alignment** (Kabsch algorithm)
-   - Click **Run ICP** for refinement
-   - Accept or reject the corrected registration
-6. Click **Save QC Status** when done
+5. **Single-click** to select; **double-click** to open detailed alignment view
+6. In the detailed view, inspect the overlay of scan (colored by signed distance) against the reference mesh, then choose **Accept** or **Flag as Errand**
+7. Click **Save QC Status** when done
+
+#### 6b — Re-register Failed Scans (Errand Resolution)
+
+Scans flagged as errands can be re-registered using manually placed landmarks. This is the recommended approach when automatic ICP failed due to a poor starting position.
+
+**Workflow:**
+
+1. In the QC Review grid, right-click (or use the context menu) on a red-bordered thumbnail and choose **Re-register**
+2. The **Errand Resolution Dialog** opens with three panels:
+   - **Left panel**: GPA reference mesh (the group's mean)
+   - **Middle panel**: the failing scan in its original coordinate frame
+   - **Right panel**: distance map (shown after alignment)
+3. **Pick corresponding landmarks**: click on the same anatomical point in both the left and middle panels. A yellow sphere with a number label appears at each picked point. You need at least **3 pairs** (more is better — 5–8 pairs typically gives a robust result).
+4. Click **Compute Alignment** — the Kabsch SVD algorithm computes the optimal rigid transform from your landmark pairs and applies it to the scan. The right panel shows the resulting distance map.
+5. Optionally click **Run ICP** to refine the landmark-based alignment with point-to-plane ICP. This is recommended when landmarks are placed imprecisely.
+6. If the alignment looks correct (low RMS, reasonable distance map), click **Accept Result**.
+7. If the result is still wrong, use **Undo Last Pair** or **Clear All Pairs** and try different landmarks, then repeat from step 4.
+
+**What happens when you accept:**
+
+- The corrected 4×4 transform matrix and all recomputed metrics (RMS, MAD, Hausdorff, coverage) are immediately written back to the scan's `qc/transforms/<scanId>.json` file, overwriting the original failed registration.
+- The scan's QC status is set to **Accepted** (resolved errand) in the JSON sidecar.
+- The status bar reminds you to run **Rebuild Metrics from Transforms** to propagate the corrected numbers into the CSV files.
+
+**Landmark tips:**
+
+| Tip | Reason |
+|-----|--------|
+| Use cusp tips and distinct occlusal features | Unambiguous 3-D correspondence |
+| Spread landmarks across the arch | Prevents rotation drift |
+| Avoid gingival margin — it deforms | Introduces systematic error |
+| 5–8 pairs is usually enough | Adding more beyond 8 yields diminishing returns |
+
+#### 6c — Rebuild All Metric CSVs
+
+After re-registering one or more errands, the CSV files still contain the original (bad) metric values. Click **Rebuild Metrics from Transforms** to regenerate all output files from scratch using the corrected JSON files.
+
+**What the rebuild does:**
+
+| Phase | Operation | Speed |
+|-------|-----------|-------|
+| Read JSONs | Parses every `qc/transforms/*.json` file | Instant |
+| Trueness CSVs | Aggregates per-scan metrics stored in the JSON (no STL reload) | Fast |
+| Precision CSVs | Reloads original STLs, applies stored transforms, recomputes all pairwise distances | Slow (same cost as original batch) |
+| Summary CSV | Recomputes scanner×SKD group statistics from trueness results | Fast |
+
+**Files overwritten:**
+
+- `long_format_metrics.csv` — all scans, all metrics
+- `trueness_metrics_all.csv` — all scans (pre-QC)
+- `trueness_metrics.csv` — only QC-accepted scans (errands excluded)
+- `precision_matrix.csv` — pairwise precision per scanner×SKD (errands excluded from pairs)
+- `summary_by_scanner_skd.csv` — mean/SD summary
+
+**Notes:**
+
+- Scans whose QC status is **Errand** are excluded from `trueness_metrics.csv` and from all precision pair computations.
+- Precision recomputation uses the geometric ROI (bounding box, plane slab, brush zones) from the currently loaded study config. Tooth-segmentation base selections are not stored in the JSON files and are therefore not re-applied; if your ROI relies primarily on the base selection, precision values may differ very slightly from the original batch.
+- You only need to run this once after resolving all errands, not after every individual re-registration.
 
 ---
 
@@ -376,11 +429,24 @@ To close this gap, the QC tab now includes an **"Apply ROI template"** checkbox 
 
 **When unchecked (default):** Behavior is unchanged from before. Distances are computed on the full mesh and every vertex is colored by its signed distance to the reference. Existing images are skipped (not regenerated). This mode is useful for a quick visual check of the overall scan alignment.
 
-**When checked:** The application loads the ROI template currently set in the Batch Configuration tab and builds the same per-vertex inclusion mask that the batch processor used when computing metrics. Vertices that fall inside the ROI are colored normally by their signed distance value (blue–white–red diverging scale). Vertices that fall outside the ROI are rendered in dark grey, making the boundary of the analysis region immediately visible. Additionally, when this mode is active, **existing images are always regenerated** — the "skip if already exists" optimization is bypassed, because the user has explicitly requested a different rendering.
+**When checked:** The application loads the ROI template currently set in the Batch Configuration tab and builds the same per-vertex inclusion mask that the batch processor used when computing metrics. Vertices that fall inside the ROI are colored normally by their signed distance value (blue–white–red diverging scale). Vertices that fall outside the ROI are rendered in dark grey, making the boundary of the analysis region immediately visible.
 
 **Important:** The ROI mask applied here is the geometric part of the ROI only — bounding box, plane slab, and brush override zones. The tooth segmentation base selection (which is scan-specific and not stored in the transform JSON) is not re-applied in this phase. If your metric ROI relied primarily on the base selection, the grey-vs-colored boundary in the images will not perfectly match the metric boundary, but it will still correctly reflect all spatial constraints (box, slab, brush zones).
 
 **Prerequisite:** The ROI template file path must be set in the **Batch Configuration** tab (the same path used during the batch run). If the field is empty or the file does not exist, the button will show a warning and abort.
+
+#### Smart Image Caching
+
+Generating difference images is slow because each scan requires a VTK offscreen render pass. The application avoids redundant work using a small sidecar file (`<scanId>.meta`) stored next to each PNG in `qc/difference_images/`.
+
+| Condition | Action |
+|-----------|--------|
+| Image missing | Always generate |
+| Image exists, "Apply ROI" unchecked | Skip (image is from a previous run without ROI) |
+| Image exists, "Apply ROI" checked, same ROI template file and same file modification time | Skip (ROI already applied correctly) |
+| Image exists, "Apply ROI" checked, ROI template changed | Regenerate and update the sidecar |
+
+This means re-clicking **Generate Difference Images** after a previous successful run is essentially free — only images that are genuinely out-of-date (or missing) are regenerated. If you modify your ROI template file and re-generate, only scans whose images reflect the old template are re-rendered.
 
 #### Summary: What the ROI Affects and Where
 
@@ -556,10 +622,11 @@ Progress is tracked in `.batch_progress.json` in the output directory.
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  QUALITY CONTROL                                                    │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
-│  │  Review  │───▶│   Fix    │───▶│  Final   │                       │
-│  │Thumbnails│    │ Errands  │    │ Statistics│                      │
-│  └──────────┘    └──────────┘    └──────────┘                       │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
+│  │  Review  │───▶│ Re-reg.  │───▶│ Overwrite│───▶│ Rebuild  │      │
+│  │Thumbnails│    │ Errands  │    │   JSON   │    │  Metrics │      │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘      │
+│  (flag bad)    (landmarks+ICP)   (automatic)    (button click)     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
