@@ -105,6 +105,13 @@ int main(int argc, char *argv[])
     );
     parser.addOption(preAlignedOption);
 
+    // Normalized scans flag (suppresses JSON transform loading)
+    QCommandLineOption normalizedOption(
+        "normalized",
+        "Scans are normalized (transform already baked into geometry; skip JSON transform loading)."
+    );
+    parser.addOption(normalizedOption);
+
     // Alignments directory (pre-computed transforms from DentScanAlign)
     QCommandLineOption alignmentsOption(
         QStringList() << "a" << "alignments",
@@ -140,6 +147,7 @@ int main(int argc, char *argv[])
         QString externalRefPath = parser.value(externalRefOption);
         QString alignmentsDir = parser.value(alignmentsOption);
         bool preAligned = parser.isSet(preAlignedOption);
+        bool normalized = parser.isSet(normalizedOption);
         bool verbose = parser.isSet(verboseOption);
 
         std::cout << "Study file:  " << studyPath.toStdString() << "\n";
@@ -157,6 +165,9 @@ int main(int argc, char *argv[])
         if (preAligned) {
             std::cout << "Pre-aligned:  YES (skip GPA, ICP refinement only)\n";
         }
+        if (normalized) {
+            std::cout << "Normalized:   YES (skip JSON transforms, geometry already transformed)\n";
+        }
         std::cout << "\n" << std::flush;
 
         try {
@@ -170,6 +181,9 @@ int main(int argc, char *argv[])
             }
             if (preAligned) {
                 config.scansPreAligned = true;
+            }
+            if (normalized) {
+                config.scansNormalized = true;
             }
             if (!alignmentsDir.isEmpty()) {
                 config.alignmentsDirectory = alignmentsDir;

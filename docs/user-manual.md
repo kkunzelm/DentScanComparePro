@@ -201,7 +201,7 @@ Use this mode to:
    - **Masked ICP Output** (optional): Separate output directory for masked ICP results
    - **External Ref** (optional): CAD or lab scanner reference STL
    - **ROI Template** (optional): JSON file from ROI Template Editor (enables masked ICP and ROI-based metrics)
-3. Check **Scans are pre-aligned** if using DentScanAlign output
+3. Configure DentScanAlign options (see below) if using DentScanAlign output
 4. Click **Load Configuration** to verify
 5. Go to **Batch Processing** tab
 6. Configure **Registration Options**:
@@ -256,16 +256,40 @@ Note: Even when masked ICP is disabled, the ROI template is still used to filter
     --verbose
 ```
 
-**With Pre-aligned Scans (from DentScanAlign):**
+**DentScanAlign Integration — Two Workflows**
+
+DentScanAlign produces two outputs for each scan: a **normalized STL** (mesh geometry already in the aligned coordinate frame) and a **JSON transform file** (the 4×4 matrix that was applied). These two outputs require different settings in DentScanComparePro.
+
+**Workflow A — Using normalized STL files (transform already baked into geometry):**
+
+This is the most common case. The STL files are already positioned correctly; the JSON files must be ignored to avoid applying the transform a second time.
+
 ```bash
 ./DentScanComparePro --batch \
     --study study.json \
     --data-root normalized/ \
+    --external-ref reference.stl \
+    --normalized \
+    --verbose
+```
+
+GUI: enable **"Scans are normalized (skip JSON transforms, already applied)"** (checked by default).
+
+**Workflow B — Using raw STL files with JSON transforms:**
+
+The STL files are in their original scanner coordinate frame. The JSON transform files are loaded and applied before ICP refinement.
+
+```bash
+./DentScanComparePro --batch \
+    --study study.json \
+    --data-root raw/ \
     --alignments alignments/ \
     --external-ref reference.stl \
     --pre-aligned \
     --verbose
 ```
+
+GUI: uncheck **"Scans are normalized"**, check **"Scans are pre-aligned, use JSON transforms for ICP"**, and set `alignments_directory` in your study config.
 
 ### Step 5: Review Results
 
@@ -325,7 +349,8 @@ Options:
   -r, --roi-template <file> ROI template with tooth segmentation settings
   -a, --alignments <dir>   Directory with DentScanAlign JSON transforms
   -e, --external-ref <file> External reference STL (CAD or lab scanner)
-  --pre-aligned            Skip GPA; scans already coarsely aligned
+  --pre-aligned            Skip GPA; apply JSON transforms before ICP refinement
+  --normalized             Scans are normalized; skip JSON transform loading (default in GUI)
   --verbose                Print detailed progress information
   -h, --help               Show help message
 ```
@@ -415,9 +440,9 @@ The batch processor executes these stages for each SKD group:
 | ROI still active when disabled | See "Full-Mesh Mode" below |
 | Precision metrics hang | Fixed in v1.0.1 - AABB trees are now cached |
 
-### Full-Mesh Mode (Important for Pre-Aligned Scans)
+### Full-Mesh Mode (Important for Normalized/Pre-Aligned Scans)
 
-If you're using pre-aligned STL files (e.g., from DentScanAlign), you typically want **full-mesh ICP** without any ROI restrictions.
+If you're using normalized STL files from DentScanAlign, you typically want **full-mesh ICP** without any ROI restrictions.
 
 **To ensure full-mesh mode:**
 1. **Uncheck** "Use ROI mask for registration (masked ICP)" in Batch Processing options

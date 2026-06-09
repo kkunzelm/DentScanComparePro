@@ -132,9 +132,9 @@ bool BatchRunner::run(
         }
     }
 
-    // Load precomputed transforms from DentScanAlign (if directory specified)
+    // Load precomputed transforms from DentScanAlign (if directory specified and scans are not pre-normalized)
     std::map<std::string, Eigen::Matrix4d> precomputedTransforms;
-    if (!config.alignmentsDirectory.isEmpty()) {
+    if (!config.alignmentsDirectory.isEmpty() && !config.scansNormalized) {
         if (m_verbose) {
             std::cout << "Loading precomputed transforms from: "
                       << config.alignmentsDirectory.toStdString() << "...\n" << std::flush;
@@ -143,6 +143,8 @@ bool BatchRunner::run(
         if (m_verbose && !precomputedTransforms.empty()) {
             std::cout << "  Loaded " << precomputedTransforms.size() << " transforms\n" << std::flush;
         }
+    } else if (!config.alignmentsDirectory.isEmpty() && config.scansNormalized && m_verbose) {
+        std::cout << "Skipping JSON transform loading: scans are normalized (transform already baked into geometry)\n" << std::flush;
     }
 
     // Check for existing progress (resume support)

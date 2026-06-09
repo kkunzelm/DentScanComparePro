@@ -158,6 +158,7 @@ private:
     QLineEdit* m_externalRefEdit = nullptr;
     QLineEdit* m_roiTemplateEdit = nullptr;
     class QCheckBox* m_scansPreAlignedChk = nullptr;
+    class QCheckBox* m_scansNormalizedChk = nullptr;
     QTreeWidget* m_studyTree = nullptr;
     QLabel* m_studyNameLabel = nullptr;
     QLabel* m_scannerCountLabel = nullptr;

@@ -145,6 +145,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.referenceStrategy = study["reference_strategy"].toString("gpa_mean");
     config.externalReferencePath = study["external_reference_path"].toString();
     config.scansPreAligned = study["scans_pre_aligned"].toBool(false);
+    config.scansNormalized = study["scans_normalized"].toBool(true);
     config.alignmentsDirectory = study["alignments_directory"].toString();
 
     // Alignment config
@@ -242,6 +243,7 @@ void StudyConfig::saveToJSON(const QString& path) const {
     if (scansPreAligned) {
         study["scans_pre_aligned"] = scansPreAligned;
     }
+    study["scans_normalized"] = scansNormalized;
     if (!alignmentsDirectory.isEmpty()) {
         study["alignments_directory"] = alignmentsDirectory;
     }

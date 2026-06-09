@@ -75,6 +75,7 @@ public:
     QString referenceStrategy = "gpa_mean";  // "gpa_mean", "fixed_scanner:<name>", or "external"
     QString externalReferencePath;           // Path to external reference STL (when referenceStrategy == "external")
     bool scansPreAligned = false;            // If true, skip GPA alignment (scans already aligned by DentScanAlign)
+    bool scansNormalized = true;             // If true, do NOT load/apply JSON transforms (geometry already contains the baked transform)
     QString alignmentsDirectory;             // Directory containing DentScanAlign JSON transform files
 
     // Scanner definitions

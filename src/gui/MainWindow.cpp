@@ -74,6 +74,7 @@ void MainWindow::loadSettings()
     QSignalBlocker b4(m_templatePathEdit);
     QSignalBlocker b5(m_externalRefEdit);
     QSignalBlocker b6(m_scansPreAlignedChk);
+    QSignalBlocker b10(m_scansNormalizedChk);
     QSignalBlocker b7(m_roiTemplateEdit);
     QSignalBlocker b8(m_useMaskedICPChk);
     QSignalBlocker b9(m_maskedOutputDirEdit);
@@ -90,6 +91,7 @@ void MainWindow::loadSettings()
     m_externalRefEdit->setText(settings.value("paths/externalRef").toString());
     m_roiTemplateEdit->setText(settings.value("paths/roiTemplate").toString());
     m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
+    m_scansNormalizedChk->setChecked(settings.value("options/scansNormalized", true).toBool());
     m_useMaskedICPChk->setChecked(settings.value("options/useMaskedICP", true).toBool());
 
     m_templatePathEdit->setText(settings.value("paths/templateScan").toString());
@@ -105,6 +107,7 @@ void MainWindow::saveSettings()
     settings.setValue("paths/externalRef", m_externalRefEdit->text());
     settings.setValue("paths/roiTemplate", m_roiTemplateEdit->text());
     settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
+    settings.setValue("options/scansNormalized", m_scansNormalizedChk->isChecked());
     settings.setValue("options/useMaskedICP", m_useMaskedICPChk->isChecked());
     settings.setValue("paths/templateScan", m_templatePathEdit->text());
 }
@@ -246,11 +249,41 @@ void MainWindow::setupConfigTab()
     pathsLayout->addRow("ROI Template:", roiRow);
 
     // Pre-aligned checkbox
-    m_scansPreAlignedChk = new QCheckBox("Scans are pre-aligned (from DentScanAlign)");
-    m_scansPreAlignedChk->setToolTip("Check this if scans were coarsely aligned via landmark registration.\n"
-                                      "This skips GPA computation but still runs ICP refinement against the reference.");
-    connect(m_scansPreAlignedChk, &QCheckBox::toggled, this, &MainWindow::saveSettings);
+    m_scansPreAlignedChk = new QCheckBox("Scans are pre-aligned, use JSON transforms for ICP");
+    m_scansPreAlignedChk->setToolTip(
+        "Check this if scans were coarsely aligned by DentScanAlign and you want to\n"
+        "apply the JSON transform files as initialization before ICP refinement.\n"
+        "Effect: skips GPA, loads transforms from the alignments directory, uses a\n"
+        "tighter ICP correspondence distance (5 mm) since scans are already roughly aligned.\n\n"
+        "Note: if your STL files are already normalized (transform baked into geometry),\n"
+        "uncheck this and enable 'Scans are normalized' instead.");
+    connect(m_scansPreAlignedChk, &QCheckBox::toggled, this, [this](bool checked) {
+        if (checked) {
+            QSignalBlocker b(m_scansNormalizedChk);
+            m_scansNormalizedChk->setChecked(false);
+        }
+        saveSettings();
+    });
     pathsLayout->addRow("", m_scansPreAlignedChk);
+
+    // Normalized scans checkbox (default: on)
+    m_scansNormalizedChk = new QCheckBox("Scans are normalized (skip JSON transforms, already applied)");
+    m_scansNormalizedChk->setChecked(true);
+    m_scansNormalizedChk->setToolTip(
+        "Check this if your STL files are DentScanAlign normalized scans, i.e. the\n"
+        "alignment transform has already been baked into the mesh geometry.\n"
+        "Effect: JSON transform files in the alignments directory are NOT loaded or applied,\n"
+        "preventing the transform from being applied a second time.\n\n"
+        "If unchecked (and alignments directory is set), raw scans will be transformed\n"
+        "using the JSON matrices before ICP refinement.");
+    connect(m_scansNormalizedChk, &QCheckBox::toggled, this, [this](bool checked) {
+        if (checked) {
+            QSignalBlocker b(m_scansPreAlignedChk);
+            m_scansPreAlignedChk->setChecked(false);
+        }
+        saveSettings();
+    });
+    pathsLayout->addRow("", m_scansNormalizedChk);
 
     // Load button
     auto* loadBtn = new QPushButton("Load Configuration");
@@ -1394,6 +1427,7 @@ void MainWindow::runBatch()
     QString externalRef = m_externalRefEdit->text();
     QString roiTemplatePath = m_roiTemplateEdit->text();
     bool scansPreAligned = m_scansPreAlignedChk->isChecked();
+    bool scansNormalized = m_scansNormalizedChk->isChecked();
 
     m_batchLog->clear();
     m_batchLog->append("Starting batch processing...");
@@ -1411,11 +1445,15 @@ void MainWindow::runBatch()
     if (scansPreAligned) {
         m_batchLog->append("Scans pre-aligned: YES (skipping GPA, ICP refinement will run)");
     }
+    if (scansNormalized) {
+        m_batchLog->append("Scans normalized: YES (JSON transforms will NOT be loaded)");
+    }
     m_batchLog->append("");
 
     // Update study config with GUI settings
     m_studyConfig.externalReferencePath = externalRef;
     m_studyConfig.scansPreAligned = scansPreAligned;
+    m_studyConfig.scansNormalized = scansNormalized;
     if (!externalRef.isEmpty()) {
         m_studyConfig.referenceStrategy = "external";
     }
