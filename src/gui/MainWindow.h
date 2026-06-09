@@ -115,6 +115,7 @@ private:
     void updateStudyOverview();
     void updateROIVisualization();
     void enableBatchControls(bool enabled);
+    bool regenerateDifferenceImageForScan(const QString& scanId, const QString& outputDir);
 
     // === Data ===
     DentScanBatch::StudyConfig m_studyConfig;

@@ -69,8 +69,8 @@ Create a JSON file describing your study:
   ],
   "output": {
     "metrics_csv": "trueness_metrics.csv",
-    "precision_csv": "precision_metrics.csv",
-    "summary_csv": "summary_stats.csv"
+    "precision_csv": "precision_matrix.csv",
+    "summary_csv": "summary_by_scanner_skd.csv"
   }
 }
 ```
@@ -297,9 +297,13 @@ GUI: uncheck **"Scans are normalized"**, check **"Scans are pre-aligned, use JSO
 
 | File | Description |
 |------|-------------|
-| `trueness_metrics.csv` | Per-scan metrics (RMS, MAD, Max, P95, coverage) |
-| `precision_metrics.csv` | Per-scanner-per-SKD pairwise precision |
-| `summary_stats.csv` | Aggregated statistics by scanner and SKD |
+| `trueness_metrics.csv` | Per-scan metrics, QC-filtered (errands excluded) |
+| `trueness_metrics_all.csv` | Per-scan metrics, all scans including errands |
+| `long_format_metrics.csv` | Per-scan metrics written directly by the batch runner |
+| `precision_matrix.csv` | Per-scanner-per-SKD pairwise precision |
+| `summary_by_scanner_skd.csv` | Aggregated RMS statistics by scanner and SKD |
+
+See **Appendix A — Output CSV Reference** for a full description of every column in every file.
 
 **QC Data (in `qc/` subdirectory):**
 
@@ -312,81 +316,217 @@ GUI: uncheck **"Scans are normalized"**, check **"Scans are pre-aligned, use JSO
 
 ### Step 6: Quality Control Review
 
-Poor registrations can corrupt your statistics. The QC workflow has two sub-phases: reviewing alignments and, if needed, re-registering failed scans and rebuilding the metric files.
+Poor registrations corrupt your statistics silently: a scan that failed ICP alignment may appear in your CSV with an artificially high or low RMS value and skew both trueness and precision results. The QC workflow exists to detect these failures before you run your statistics, correct them using manually placed landmarks, and rebuild the final metric files from the corrected data.
 
-#### 6a — Review Thumbnails
+Work through phases 6a through 6e in order. Phases 6d and 6e are only needed when you have flagged errands that require re-registration.
 
-1. Go to **QC Review** tab
-2. Click **Load QC Data from Results**
-3. Click **Generate Difference Images** to render color-coded distance maps (see section below for options)
-4. Review thumbnails:
-   - **Green border** = Accepted
-   - **Red border** = Flagged as errand (registration failure)
-   - **Yellow border** = Statistical outlier (RMS > mean + 2σ) — review these first
-   - **Grey border** = Pending review
-5. **Single-click** to select; **double-click** to open detailed alignment view
-6. In the detailed view, inspect the overlay of scan (colored by signed distance) against the reference mesh, then choose **Accept** or **Flag as Errand**
-7. Click **Save QC Status** when done
+---
 
-#### 6b — Re-register Failed Scans (Errand Resolution)
+#### 6a — Load QC Data
 
-Scans flagged as errands can be re-registered using manually placed landmarks. This is the recommended approach when automatic ICP failed due to a poor starting position.
+1. Go to the **QC Review** tab.
+2. Confirm that **Output Dir** in the Batch Configuration tab points to the same directory that was used for batch processing.
+3. Click **Load QC Data from Results**.
 
-**Workflow:**
+The application scans the `qc/transforms/` subdirectory of your output directory and reads every `*.json` file it finds. Each JSON file encodes the 4×4 alignment matrix and all metric values that were computed for one scan during the batch run. From these files the application builds its scan registry in memory.
 
-1. In the QC Review grid, **click** each scan you want to re-register to select it (selected scans get a blue border). You can select individual problem scans, or use **Flag as Errand** first and then select all red-bordered scans.
-2. Click **Re-align Selected** (orange button in the toolbar). The dialog will open for each selected scan in sequence.
-3. The **Errand Resolution Dialog** opens with three panels:
-   - **Left panel**: GPA reference mesh (the group's mean)
-   - **Middle panel**: the failing scan in its original coordinate frame
-   - **Right panel**: distance map (shown after alignment)
-3. **Pick corresponding landmarks**: click on the same anatomical point in both the left and middle panels. A yellow sphere with a number label appears at each picked point. You need at least **3 pairs** (more is better — 5–8 pairs typically gives a robust result).
-4. Click **Compute Alignment** — the Kabsch SVD algorithm computes the optimal rigid transform from your landmark pairs and applies it to the scan. The right panel shows the resulting distance map.
-5. Optionally click **Run ICP** to refine the landmark-based alignment with point-to-plane ICP. This is recommended when landmarks are placed imprecisely.
-6. If the alignment looks correct (low RMS, reasonable distance map), click **Accept Result**.
-7. If the result is still wrong, use **Undo Last Pair** or **Clear All Pairs** and try different landmarks, then repeat from step 4.
+In parallel, it loads `qc/qc_status.json` if that file exists. This file persists the QC decisions (Pending / Accepted / Errand) from previous review sessions. If the file does not yet exist, every scan starts with **Pending** status.
 
-**What happens when you accept:**
+After loading, the thumbnail gallery is populated — one card per scan — showing:
+- The scan identifier (format: `ScannerName_SKDXX_rN`)
+- The RMS distance value in millimetres
+- A status icon (see Section 6c)
+- The difference image PNG as the card background, or a grey placeholder if images have not been generated yet
 
-- The corrected 4×4 transform matrix and all recomputed metrics (RMS, MAD, Hausdorff, coverage) are immediately written back to the scan's `qc/transforms/<scanId>.json` file, overwriting the original failed registration.
-- The scan's QC status is set to **Accepted** (resolved errand) in the JSON sidecar.
-- The status bar reminds you to run **Rebuild Metrics from Transforms** to propagate the corrected numbers into the CSV files.
+The status bar above the gallery shows running counts: `Pending: N  |  Accepted: N  |  Errands: N`.
 
-**Landmark tips:**
+---
+
+#### 6b — Generate Difference Images
+
+Difference images are color-coded surface deviation maps rendered from a top-down (occlusal) camera position. Each pixel encodes how far the scan surface deviates from the GPA reference mesh at that point. They are the primary visual tool for detecting registration failures: a correctly aligned scan shows a symmetric, low-amplitude color pattern; a misaligned scan shows a strong directional gradient or systematic one-sided coloring.
+
+Difference images are **not** generated during batch processing. VTK offscreen rendering is explicitly disabled in the batch processing thread because it is not reliable under a background thread. Instead, the batch run writes two files per scan to disk — the alignment matrix JSON and the reference mesh STL — and defers all rendering to this explicit step.
+
+**To generate images:**
+
+1. (Recommended) Check **Apply ROI template** if you want the images to reflect the analysis region actually used for metric computation. With this option:
+   - Vertices that are **inside** the ROI are colored by their signed distance value on a diverging blue–white–red scale (±0.5 mm: blue = scan recessed, red = scan proud).
+   - Vertices that are **outside** the ROI are rendered in dark grey, making the analysis boundary immediately visible.
+   - The ROI template path must be set in the Batch Configuration tab. If it is empty or the file does not exist, the application will show a warning and abort.
+2. Click **Generate Difference Images**.
+3. A progress dialog shows the per-scan progress. Scans whose images are already up-to-date are skipped automatically (see **Smart Image Caching** further above). Only missing or stale images are regenerated.
+
+After generation completes, the thumbnail gallery refreshes automatically and shows the new images.
+
+**Note on the "Apply ROI" limitation:** The ROI mask applied during image generation covers the geometric ROI only — bounding box, plane slab, and brush override zones. The tooth segmentation base selection (which is scan-specific and was not saved to the transform JSON) is not re-applied. If your metric ROI relied primarily on the base selection, the grey/colored boundary in the images will not perfectly match the exact vertex set that contributed to the CSV numbers. All spatial constraints (box, slab, brush zones) are, however, correctly reflected.
+
+---
+
+#### 6c — Understanding the Thumbnail Gallery
+
+Each thumbnail card shows the following visual indicators:
+
+**Border color** (outside edge of the card):
+
+| Border | Meaning |
+|--------|---------|
+| Grey | Pending — not yet reviewed |
+| Green | Accepted — registration confirmed good |
+| Red | Errand — registration failure, needs re-alignment |
+| Yellow | Statistical outlier (RMS > mean + 2σ) — still Pending, but flagged for attention |
+| Blue | Currently selected (click again to deselect) |
+
+**Status icon** (small symbol in the bottom-left corner of each card):
+
+| Icon | Meaning |
+|------|---------|
+| ○ | Pending |
+| ✓ (green) | Accepted |
+| ✗ (red) | Errand |
+
+**Sorting and priority:** The gallery is sorted such that statistical outliers (yellow borders) appear first in each group, making it easy to start your review with the most suspicious scans. Within each group, cards are sorted alphabetically by scan ID.
+
+---
+
+#### 6d — Reviewing and Classifying Scans
+
+**Single-scan detailed review:**
+
+Double-click any thumbnail to open the alignment inspection dialog. This shows the scan mesh overlaid on the reference mesh, colored by signed distance. You can rotate the view and inspect the alignment from any angle. Two buttons at the bottom of the dialog let you:
+- **Accept** — mark this scan as good; the thumbnail immediately shows a green ✓ and green border
+- **Flag as Errand** — mark this scan as a registration failure; the thumbnail immediately shows a red ✗ and red border
+
+**Selecting multiple scans:**
+
+Single-click any thumbnail to select it (blue border). Click again to deselect. You can build up a selection of any number of scans this way. Selections are used as input for the **Flag as Errand** and **Re-align Selected** buttons.
+
+**Bulk acceptance:**
+
+Click **Accept All Visible** to mark every currently visible pending scan as Accepted in one step. This is appropriate when the thumbnail review and the difference images confirm that all alignments are reasonable and you do not want to inspect each scan individually.
+
+**Flagging failures:**
+
+Select one or more thumbnails (single-click), then click **Flag as Errand**. The selected scans are immediately marked with ✗ and red borders. The errand count in the status bar updates accordingly.
+
+**Saving QC status manually:**
+
+Click **Save QC Status** at any point to persist the current status of all scans to disk. The application writes:
+- `qc/qc_status.json` — complete status record for every scan (status, review time, RMS values, whether resolved)
+- `qc/errands.json` — compact list of scans that are currently in Errand status (unresolved)
+
+You do **not** need to save manually after re-registration — the application saves automatically when you accept a re-alignment result (see Section 6e). Manual saving is mainly useful when you have accepted or flagged scans interactively without going through the re-registration dialog.
+
+---
+
+#### 6e — Re-registering Failed Scans (Errand Resolution)
+
+Scans flagged as errands can be re-registered interactively using manually placed landmark point pairs. This is the recommended approach whenever the automatic ICP algorithm failed because the scan was too far from the reference in its initial position (e.g., a different scanner coordinate system origin, a large jaw-opening angle difference, or a grossly misaligned starting pose).
+
+**Selecting scans for re-registration:**
+
+You can re-register one scan at a time or process a batch of errands in sequence:
+- To re-register a **single scan**: click its thumbnail once (blue border) and then click **Re-align Selected**.
+- To re-register **all errands at once**: click each errand thumbnail to select them (or use any multi-select approach), then click **Re-align Selected**. The application opens the resolution dialog for each scan in sequence and waits for you to complete each one before moving to the next.
+
+**The Errand Resolution Dialog:**
+
+The dialog shows three panels side-by-side:
+
+| Panel | Content | Purpose |
+|-------|---------|---------|
+| Left | GPA reference mesh (the group's mean surface) | The registration target — pick landmarks here |
+| Middle | The failing scan in its original (un-aligned) coordinate frame | The scan to be re-aligned — pick matching landmarks here |
+| Right | Color-coded distance map | Live feedback after each alignment attempt |
+
+All three panels support full 3-D interaction: left-drag to rotate, right-drag or scroll to zoom, middle-drag to pan.
+
+**Step-by-step re-registration:**
+
+1. **Pick corresponding landmark pairs.** Click on a distinctive anatomical point in the **left panel** (reference mesh). A yellow sphere with a number label appears. Then click the **same anatomical location** on the **middle panel** (scan). The same number label appears, completing one pair. Repeat until you have at least **3 pairs**. Five to eight pairs spread across the arch typically give a robust result.
+
+   Good landmark choices:
+   - Cusp tips (unambiguous 3-D position)
+   - Fossa centers
+   - Incisal edges
+   - Well-defined ridge peaks
+
+   Avoid:
+   - Gingival margins (deform between scans)
+   - Flat, featureless surfaces (ambiguous in-plane position)
+   - Scan borders (often incomplete or noisy)
+
+2. Click **Compute Alignment**. The application runs the Kabsch SVD algorithm on your landmark pairs, computes the optimal rigid transform, applies it to the scan mesh, and immediately displays the resulting distance map in the right panel along with the new RMS value.
+
+3. Inspect the right panel. A successful re-alignment shows a low-amplitude, approximately symmetric color pattern (mostly white/light blue or light red, with no strong directional gradient). If the result looks poor, click **Undo Last Pair** to remove the most recent pair, or **Clear All Pairs** to start over, then try different landmark positions.
+
+4. (Optional but recommended) Click **Run ICP** to refine the landmark-based coarse alignment with point-to-plane ICP (100 iterations). This step is especially helpful when landmarks were placed with less precision than ideal, or when the scan has a systematic small rotational offset remaining after landmark alignment. The right panel updates automatically with the refined result.
+
+5. If the alignment is satisfactory, click **Accept Result**.
+
+6. If the alignment is still wrong after trying ICP refinement, click **Clear All Pairs**, choose different landmark locations (preferably more spread out across the arch), and try again from step 1.
+
+**What happens automatically when you click Accept Result:**
+
+The following actions happen immediately and without any further user interaction:
+
+1. **Transform JSON overwritten.** The corrected 4×4 transform matrix and all recomputed metrics (RMS, MAD, H100, H95, Bias, Coverage) are written to `qc/transforms/<scanId>.json`, replacing the original failed registration data. This is the authoritative record for subsequent metric rebuilds.
+
+2. **QC status updated to Accepted.** The scan's status changes from Errand to **Accepted** in the in-memory ErrandManager. The thumbnail immediately shows a green ✓ icon and a green border when the gallery refreshes.
+
+3. **QC status files saved to disk automatically.** `qc/qc_status.json` and `qc/errands.json` are rewritten immediately. You do not need to click **Save QC Status** manually. The resolved scan is no longer listed in `errands.json`; it appears in `qc_status.json` with `"status": "accepted"`, `"resolved": true`, the new RMS value, and the correction method (`"landmark"`).
+
+4. **Difference image regenerated.** The application immediately re-runs the full rendering pipeline for this scan — reloads the STL, applies the new transform, rebuilds the AABB reference tree, recomputes per-vertex distances, and renders a new PNG file. The old (bad) image is overwritten. If **Apply ROI template** is checked, the ROI mask is applied to the new image as well. The thumbnail gallery refreshes to show the updated image.
+
+The status bar shows a message of the form: `Scan XYZ re-registered. New RMS: 0.042 mm. Run 'Rebuild Metrics from Transforms' to update CSVs. Difference image updated.`
+
+**If processing a batch of errands:** After you accept (or cancel) the dialog for one scan, the dialog opens automatically for the next selected scan. The status bar tracks progress (`Re-aligning XYZ (2 of 5)...`). You can cancel the entire batch at any point by simply closing the dialog.
+
+**Landmark tips summary:**
 
 | Tip | Reason |
 |-----|--------|
 | Use cusp tips and distinct occlusal features | Unambiguous 3-D correspondence |
-| Spread landmarks across the arch | Prevents rotation drift |
-| Avoid gingival margin — it deforms | Introduces systematic error |
-| 5–8 pairs is usually enough | Adding more beyond 8 yields diminishing returns |
+| Spread landmarks across the full arch | Prevents rotation drift in under-constrained areas |
+| Avoid gingival margins | Soft tissue deforms between scans |
+| 5–8 pairs is the practical optimum | Below 3 gives poor geometry; above 8 yields diminishing returns |
+| Use ICP refinement after coarse landmark alignment | Corrects small residual misalignment from imprecise picks |
 
-#### 6c — Rebuild All Metric CSVs
+---
 
-After re-registering one or more errands, the CSV files still contain the original (bad) metric values. Click **Rebuild Metrics from Transforms** to regenerate all output files from scratch using the corrected JSON files.
+#### 6f — Rebuild All Metric CSVs
 
-**What the rebuild does:**
+After resolving errands, the CSV files in your output directory still contain the original metric values from the batch run — including the bad values from failed registrations. You must explicitly trigger a rebuild to propagate the corrected numbers into the statistics files.
+
+Click **Rebuild Metrics from Transforms**.
+
+This button re-derives all output CSVs from scratch using only the information stored in the `qc/transforms/*.json` files, applying the current QC status (scans in Errand status are excluded from the filtered output).
+
+**What the rebuild does, phase by phase:**
 
 | Phase | Operation | Speed |
 |-------|-----------|-------|
-| Read JSONs | Parses every `qc/transforms/*.json` file | Instant |
-| Trueness CSVs | Aggregates per-scan metrics stored in the JSON (no STL reload) | Fast |
-| Precision CSVs | Reloads original STLs, applies stored transforms, recomputes all pairwise distances | Slow (same cost as original batch) |
-| Summary CSV | Recomputes scanner×SKD group statistics from trueness results | Fast |
+| Parse all JSONs | Reads every `qc/transforms/*.json` and extracts metrics + transform matrices | Near-instant |
+| Write trueness CSVs | Aggregates per-scan metrics from the JSON data. No STL files are reloaded for this phase. | Fast |
+| Recompute precision | Reloads original STL files, applies stored transforms, builds AABB reference trees per group, and recomputes all pairwise inter-scan RMS distances within each scanner×SKD cell | Slow — same computational cost as the original batch run |
+| Write summary CSV | Computes scanner×SKD mean, SD, min, max from the trueness results | Fast |
 
 **Files overwritten:**
 
-- `long_format_metrics.csv` — all scans, all metrics
-- `trueness_metrics_all.csv` — all scans (pre-QC)
-- `trueness_metrics.csv` — only QC-accepted scans (errands excluded)
-- `precision_matrix.csv` — pairwise precision per scanner×SKD (errands excluded from pairs)
-- `summary_by_scanner_skd.csv` — mean/SD summary
+| File | Contents after rebuild |
+|------|----------------------|
+| `long_format_metrics.csv` | All scans, all metrics (no QC filter) |
+| `trueness_metrics_all.csv` | All scans including errands (pre-QC view) |
+| `trueness_metrics.csv` | Only QC-accepted scans — errands excluded |
+| `precision_matrix.csv` | Pairwise precision per scanner×SKD, errands excluded from all pair computations |
+| `summary_by_scanner_skd.csv` | Mean/SD/Min/Max RMS per scanner×SKD, errands excluded |
 
-**Notes:**
+**Important notes:**
 
-- Scans whose QC status is **Errand** are excluded from `trueness_metrics.csv` and from all precision pair computations.
-- Precision recomputation uses the geometric ROI (bounding box, plane slab, brush zones) from the currently loaded study config. Tooth-segmentation base selections are not stored in the JSON files and are therefore not re-applied; if your ROI relies primarily on the base selection, precision values may differ very slightly from the original batch.
-- You only need to run this once after resolving all errands, not after every individual re-registration.
+- Scans whose QC status is **Errand** (not resolved) are excluded from `trueness_metrics.csv` and from every precision pair computation. A scan that was re-registered and accepted contributes its **corrected** metrics.
+- Precision recomputation uses the geometric ROI (bounding box, plane slab, brush override zones) from the currently loaded study config. The tooth segmentation base selection is not stored in the transform JSON files and therefore cannot be re-applied during rebuild; if your ROI relies heavily on the base selection, pairwise precision values may differ very slightly from the original batch.
+- You only need to run this rebuild **once** after resolving all your errands, not after every individual re-registration. It is safe to run it multiple times — the output is always fully regenerated from the JSON files.
+- If your study config is not loaded in the current session, the precision rebuild uses full-mesh distances (no geometric ROI). Load the study config first for correct ROI-filtered precision values.
 
 ---
 
@@ -643,3 +783,139 @@ Website: [www.kunzelmann.de](https://www.kunzelmann.de)
 ---
 
 DentScanComparePro v1.0
+
+---
+
+## Appendix A — Output CSV Reference
+
+This appendix documents every CSV file that DentScanComparePro writes to the output directory, what data each file contains, and when it is generated or overwritten.
+
+All CSV files are written with a UTF-8 BOM so that they open correctly in Microsoft Excel on Windows without any import dialog.
+
+---
+
+### `trueness_metrics.csv`
+
+**When written:** After batch processing (by the batch runner) and after every **Rebuild Metrics from Transforms** operation.
+
+**What it contains:** One row per scan, **QC-filtered** — scans whose QC status is **Errand** (unresolved registration failure) are excluded. This is the primary input file for statistical analysis. If no QC review has been performed yet (all scans are Pending), all scans are included.
+
+**Columns:**
+
+| Column | Unit | Description |
+|--------|------|-------------|
+| `Observation_ID` | — | Sequential integer row counter, starting at 1 |
+| `Scanner_Model` | — | Scanner name as defined in the study configuration |
+| `SKD_Value` | mm | Inter-incisor distance (SKD level) of this condition |
+| `Repetition_ID` | — | Repetition number within the Scanner × SKD cell |
+| `Triangles` | — | Number of triangular faces in the scan mesh |
+| `Edge_mm` | mm | Mean edge length across all triangles (mesh resolution proxy — smaller = finer) |
+| `AspRatio` | — | Mean triangle aspect ratio (longest / shortest edge). 1.0 = equilateral triangle, the ideal |
+| `ATI` | — | Adaptive Tessellation Index. Spearman correlation between local curvature and triangle density (1/area). +1.0 = perfectly adaptive mesh; 0 = uniform tessellation regardless of curvature |
+| `DensHighK` | triangles/mm² | Triangle density measured in high-curvature zones (cusp tips, ridges). Higher = finer detail where it matters |
+| `DensLowK` | triangles/mm² | Triangle density measured in low-curvature zones (flat surfaces). Should be lower than DensHighK for an adaptive mesh |
+| `RMS_mm` | mm | Root Mean Square distance from scan surface to GPA reference surface, computed over all vertices inside the ROI. **This is the primary trueness metric** |
+| `MAD_mm` | mm | Median Absolute Deviation. Robust alternative to RMS — less sensitive to extreme outliers at scan borders |
+| `H100_mm` | mm | Maximum distance (100th-percentile Hausdorff). Dominated by scan boundary artifacts; use H95 for clinical interpretation |
+| `H95_mm` | mm | 95th-percentile Hausdorff distance. Clinically meaningful: 95% of the scan surface lies within this distance of the reference |
+| `Bias_mm` | mm | Signed mean distance. Positive = scan surface is proud of (outside) the reference on average; negative = scan is inside the reference. Reflects systematic dimensional error |
+| `Coverage_pct` | % | Percentage of reference surface vertices that have a corresponding scan vertex within 0.2 mm. Values below ~90% indicate incomplete scans |
+| `Boundary_mm` | mm | Total length of open boundary edges in the mesh. High values indicate scan borders or tears |
+| `Holes` | — | Number of open boundary loops (topological holes). 0 = closed mesh, >0 = incomplete regions |
+| `Stitch_deg` | ° | Maximum normal discontinuity angle at mesh stitching seams. High values (>30°) indicate stitching artifacts from the scanner software |
+| `Vertices_Included` | — | Number of mesh vertices that were inside the ROI and contributed to the metric computation |
+| `Vertices_Total` | — | Total number of vertices in the scan mesh |
+| `File_Path` | — | Absolute path to the source STL file on disk |
+
+---
+
+### `trueness_metrics_all.csv`
+
+**When written:** After batch processing and after every **Rebuild Metrics from Transforms** operation.
+
+**What it contains:** Identical structure and columns to `trueness_metrics.csv`. The only difference is that **all scans are included** — errands are not excluded. This file provides a complete pre-QC picture of all scan metrics.
+
+Use this file to:
+- Compare a scan's original (failed) metrics against its corrected metrics after re-registration
+- Audit which scans were flagged as errands and why
+- Check that the QC filter is behaving as expected (the rows in this file that are absent from `trueness_metrics.csv` are exactly the current errands)
+
+---
+
+### `long_format_metrics.csv`
+
+**When written:** Directly by the batch runner at the end of each processing run, before any QC review. Not regenerated by **Rebuild Metrics from Transforms**.
+
+**What it contains:** Same structure and columns as the trueness files above. This file is the raw output of the batch run, written before any QC status is applied. It contains all scans from that specific batch run, with no filtering.
+
+In practice, once you have run QC review and rebuilding, `trueness_metrics.csv` and `trueness_metrics_all.csv` supersede this file for analysis purposes. You can think of `long_format_metrics.csv` as a batch-run receipt.
+
+---
+
+### `precision_matrix.csv`
+
+**When written:** After batch processing (by the batch runner) and after every **Rebuild Metrics from Transforms** operation.
+
+**What it contains:** One row per Scanner × SKD cell. Each row summarises the **within-cell pairwise precision** — how consistent the same scanner is across repeated measurements under the same conditions. Precision is computed as the mean of all pairwise RMS distances between the N repetitions in the cell. For N = 5 repetitions, this involves 10 unique scan pairs.
+
+Scans in Errand status are excluded from all pair computations. If an errand is unresolved in a cell with 5 repetitions, that cell has only 4 valid scans and therefore only 6 pairs; the Pairwise_Count column reflects this.
+
+**Columns:**
+
+| Column | Unit | Description |
+|--------|------|-------------|
+| `Scanner_Model` | — | Scanner name |
+| `SKD_Value` | mm | SKD level |
+| `Precision_MeanRMS_mm` | mm | Mean of all pairwise RMS distances within this cell. **The primary precision metric** (corresponds to ISO 5725 repeatability standard deviation when computed on repeated measurements) |
+| `Precision_SD_mm` | mm | Standard deviation of the pairwise RMS values. Measures how variable the pairwise distances are — high SD suggests inconsistent scan quality |
+| `Coefficient_of_Variation` | — | SD / Mean (dimensionless). Allows precision comparison across scanners and SKD levels on a relative scale |
+| `Pairwise_Count` | — | Number of scan pairs used in the computation. For N repetitions: N×(N−1)/2 pairs |
+
+---
+
+### `summary_by_scanner_skd.csv`
+
+**When written:** After batch processing and after every **Rebuild Metrics from Transforms** operation.
+
+**What it contains:** One row per Scanner × SKD cell, summarising the RMS trueness distribution across all accepted repetitions in that cell. This is the highest-level aggregated view of trueness results — one number per experimental condition.
+
+Errands are excluded (same filter as `trueness_metrics.csv`).
+
+**Columns:**
+
+| Column | Unit | Description |
+|--------|------|-------------|
+| `Scanner_Model` | — | Scanner name |
+| `SKD_Value` | mm | SKD level |
+| `N` | — | Number of accepted scans in this cell. Should be 5 in a balanced design; fewer if errands were not resolved |
+| `Mean_RMS_mm` | mm | Arithmetic mean of per-scan RMS values across repetitions |
+| `SD_RMS_mm` | mm | Sample standard deviation of per-scan RMS values (denominator N−1) |
+| `Min_RMS_mm` | mm | Minimum per-scan RMS in this cell |
+| `Max_RMS_mm` | mm | Maximum per-scan RMS in this cell |
+
+---
+
+### Which file to use for what
+
+| Analysis task | Recommended file |
+|---------------|-----------------|
+| Per-scan statistical model (main analysis) | `trueness_metrics.csv` |
+| Checking what errands were excluded | `trueness_metrics_all.csv` |
+| Precision / repeatability analysis | `precision_matrix.csv` |
+| Quick descriptive table for a paper | `summary_by_scanner_skd.csv` |
+| R analysis script (`analyze_results.R`) | reads `trueness_metrics.csv`, `precision_matrix.csv`, `summary_by_scanner_skd.csv` |
+
+---
+
+### QC sidecar files (not CSV, but referenced here for completeness)
+
+These files are written to the `qc/` subdirectory of your output directory and drive the QC Review tab. They are not inputs to the R analysis script.
+
+| File | Description |
+|------|-------------|
+| `qc/qc_status.json` | Complete QC status for every scan: status (pending/accepted/errand), review timestamp, RMS values, whether resolved, correction method. This file is updated automatically when you accept a re-registration result or save QC status manually. |
+| `qc/errands.json` | Compact list of scans that are currently in Errand status. Updated automatically after each re-registration. Useful for a quick audit of which scans need attention. |
+| `qc/transforms/<scanId>.json` | One file per scan. Contains the 4×4 alignment transform matrix and the full set of trueness metrics (RMS, MAD, Hausdorff, Bias, Coverage, etc.). This is the source of truth for **Rebuild Metrics from Transforms**. Overwritten when a re-registration is accepted. |
+| `qc/reference_meshes/<groupId>_reference.stl` | GPA mean mesh for each SKD group. Used as the registration target in the Errand Resolution Dialog and as the reference surface for difference image generation. |
+| `qc/difference_images/<scanId>.png` | Color-coded distance map (800×800 px, occlusal view). Generated by **Generate Difference Images** and automatically overwritten after each accepted re-registration. |
+| `qc/difference_images/<scanId>.meta` | Small JSON sidecar storing the ROI template path and modification time at the time the corresponding PNG was generated. Used by the smart image cache to decide whether an image is still valid. |

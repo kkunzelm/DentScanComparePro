@@ -2000,20 +2000,29 @@ void MainWindow::onQCReregisterRequested(const QString& scanId)
             }
         }
 
-        // Update errand manager status
+        // Update errand manager status and persist to disk
         m_qcReviewWidget->errandManager().markResolved(
             scanId, dialog.newRMS(), "landmark");
+        m_qcReviewWidget->errandManager().save(outputDir);
+        m_qcReviewWidget->errandManager().saveErrandsList(outputDir);
+
+        // Regenerate difference image for this scan (overwrites old PNG)
+        bool imgOk = regenerateDifferenceImageForScan(scanId, outputDir);
 
         double newRMS = dialog.newRMS();
         QString sid = scanId;
+        bool imgGenerated = imgOk;
 
         qDebug() << "Deferring QC review refresh...";
-        QTimer::singleShot(100, this, [this, sid, newRMS]() {
+        QTimer::singleShot(100, this, [this, sid, newRMS, imgGenerated]() {
             qDebug() << "Refreshing QC review (deferred)...";
             m_qcReviewWidget->refresh();
-            m_statusLabel->setText(QString("Scan %1 re-registered. New RMS: %2 mm. "
-                                           "Run 'Rebuild Metrics from Transforms' to update CSVs.")
-                .arg(sid).arg(newRMS, 0, 'f', 3));
+            QString msg = QString("Scan %1 re-registered. New RMS: %2 mm. "
+                                  "Run 'Rebuild Metrics from Transforms' to update CSVs.")
+                .arg(sid).arg(newRMS, 0, 'f', 3);
+            if (imgGenerated)
+                msg += " Difference image updated.";
+            m_statusLabel->setText(msg);
             qDebug() << "Refresh complete";
         });
     }
@@ -2071,6 +2080,93 @@ static void writeImageMeta(const QString& metaPath, const QString& roiPath)
     QFile f(metaPath);
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+bool MainWindow::regenerateDifferenceImageForScan(const QString& scanId, const QString& outputDir)
+{
+    // Locate reference mesh directory (new or legacy naming)
+    QDir refMeshDir(outputDir + "/qc/reference_meshes");
+    bool useLegacy = false;
+    if (!refMeshDir.exists()) {
+        QDir legacyDir(outputDir + "/qc/gpa_means");
+        if (legacyDir.exists()) {
+            refMeshDir = legacyDir;
+            useLegacy = true;
+        } else {
+            return false;
+        }
+    }
+
+    // Load transform JSON
+    QString jsonPath = outputDir + "/qc/transforms/" + scanId + ".json";
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject()) return false;
+
+    QJsonObject obj = doc.object();
+    QString filePath = obj["file_path"].toString();
+    QString groupId  = obj["group"].toString();
+    if (filePath.isEmpty() || groupId.isEmpty()) return false;
+
+    // Load original STL
+    std::string errorMsg;
+    auto scanData = STLReader::read(filePath.toStdString(), errorMsg);
+    if (!scanData) return false;
+
+    // Apply stored transform
+    QJsonArray transformArray = obj["transform"].toArray();
+    Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+    for (int r = 0; r < 4 && r < transformArray.size(); ++r) {
+        QJsonArray row = transformArray[r].toArray();
+        for (int c = 0; c < 4 && c < row.size(); ++c)
+            transform(r, c) = row[c].toDouble();
+    }
+    for (auto v : scanData->mesh.vertices()) {
+        Point3& p = scanData->mesh.point(v);
+        Eigen::Vector4d pt(p.x(), p.y(), p.z(), 1.0);
+        Eigen::Vector4d tp = transform * pt;
+        p = Point3(tp.x(), tp.y(), tp.z());
+    }
+
+    // Load reference mesh and compute distances
+    QString refFilename = useLegacy ? (groupId + "_gpa_mean.stl")
+                                    : (groupId + "_reference.stl");
+    auto refMesh = STLReader::read(refMeshDir.absoluteFilePath(refFilename).toStdString(), errorMsg);
+    if (!refMesh) return false;
+
+    DistanceField::ReferenceTree refTree(refMesh->mesh);
+    refTree.computeDistances(*scanData);
+
+    // Optionally build ROI mask
+    const bool applyROI = m_qcApplyROIChk && m_qcApplyROIChk->isChecked();
+    std::vector<bool> roiMask;
+    if (applyROI) {
+        QString roiPath = m_roiTemplateEdit->text().trimmed();
+        if (!roiPath.isEmpty() && QFile::exists(roiPath)) {
+            auto roiTemplate = DentScanBatch::ROITemplate::loadFromFile(roiPath);
+            const DentScanBatch::ROIConfig& roi = roiTemplate.roi;
+            double maxZ = std::numeric_limits<double>::lowest();
+            for (auto v : scanData->mesh.vertices())
+                maxZ = std::max(maxZ, scanData->mesh.point(v).z());
+            roiMask.reserve(scanData->mesh.number_of_vertices());
+            for (auto v : scanData->mesh.vertices()) {
+                const Point3& p = scanData->mesh.point(v);
+                roiMask.push_back(roi.isInROI(p.x(), p.y(), p.z(), maxZ));
+            }
+        }
+    }
+
+    DentScanBatch::QCExporter::setImageExportEnabled(true);
+    bool ok = DentScanBatch::QCExporter::exportDifferenceImage(
+        scanData, outputDir, scanId, -0.5, 0.5, roiMask);
+
+    if (ok) {
+        QString metaPath = outputDir + "/qc/difference_images/" + scanId + ".meta";
+        writeImageMeta(metaPath, applyROI ? m_roiTemplateEdit->text().trimmed() : QString());
+    }
+    return ok;
 }
 
 void MainWindow::generateDifferenceImages()
