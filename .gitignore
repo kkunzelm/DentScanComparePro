@@ -47,9 +47,6 @@ Thumbs.db
 /SKILLS.md
 /TODO.md
 
-# Scripts directory (internal analysis)
-/scripts/
-
 # Documentation (only public docs visible)
 docs/*
 !docs/user-manual.md
