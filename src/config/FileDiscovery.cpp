@@ -118,6 +118,7 @@ int FileDiscovery::extractRepetitionId(const QString& filePath) {
 
     // Try various patterns for repetition ID
     static const QVector<QRegularExpression> patterns = {
+        QRegularExpression(R"(_[Dd](\d+)_)"),                                                 // _D1_ or _d1_ (Nold naming)
         QRegularExpression(R"(\br(\d+)\b)", QRegularExpression::CaseInsensitiveOption),       // r1, R1
         QRegularExpression(R"(\brep(\d+)\b)", QRegularExpression::CaseInsensitiveOption),     // rep1, Rep1
         QRegularExpression(R"(_r(\d+))", QRegularExpression::CaseInsensitiveOption),          // _r1

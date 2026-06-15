@@ -1,14 +1,14 @@
 # DentScanComparePro
 
-Automated batch evaluation of dental intraoral scanner accuracy.  Computes ISO 5725/12836-
-compliant trueness and precision metrics across multiple scanners and clinical conditions
-(SKD levels = inter-incisor distance).
+Automated batch evaluation of dental intraoral scanner accuracy. Computes ISO 5725/12836-
+compliant trueness and precision metrics across multiple scanners and study designs
+(phantom SKD levels, patient cohorts, or any grouping scheme).
 
 Based on the core algorithms from [DentScanCompare](../DentScanCompare/), extended with:
-- JSON/YAML-driven batch configuration
-- Automated file discovery via glob patterns
-- Per-SKD-level GPA alignment with incremental save/resume
-- Quality Control (QC) workflow with visual verification
+- JSON-driven batch configuration with generic group IDs
+- Automated file discovery via glob patterns with scanner ID matching
+- Per-group GPA alignment with incremental save/resume
+- Quality Control (QC) workflow with visual verification and re-registration
 - CSV output for statistical analysis (R, SPSS, etc.)
 
 ---
@@ -27,7 +27,7 @@ serve different use cases:
 | **Target Users** | Production pipelines, statistical analysis (R, SPSS) | Researchers exploring data interactively |
 
 **Choose DentScanComparePro when:**
-- You have a large study (multiple scanners × multiple SKD levels × repetitions)
+- You have a large study (multiple scanners × multiple groups × repetitions)
 - You need automated batch processing with resume capability
 - You require QC workflow (visual verification, errand flagging, re-registration)
 - You want to integrate with external alignment tools (DentScanAlign)
@@ -48,7 +48,7 @@ serve different use cases:
 - **CLI Mode** (`--batch`): Headless batch processing for automated pipelines
 
 ### Batch Processing
-- JSON configuration for scanners, groups (SKD levels), and output paths
+- JSON configuration for scanners, groups (SKD levels, patients, or any label), and output paths
 - Automatic file discovery via glob patterns with scanner ID matching
 - Incremental save after each group (resume after interruption)
 - Progress tracking via `.batch_progress.json`
@@ -60,9 +60,10 @@ serve different use cases:
 - Detailed overlay view (reference wireframe + distance-colored scan)
 
 ### Metrics Output
-- **Trueness**: RMS, MAD, Hausdorff (P95, Max), signed mean, coverage rate
-- **Precision**: Pairwise RMS between scan repetitions per scanner per SKD
-- **Summary**: Aggregated statistics per scanner per SKD level
+- **Tessellation**: Triangle count, mean edge length, mean/max aspect ratio, ATI, curvature density (high/low)
+- **Trueness**: RMS, MAD, Hausdorff (H95, H100), bias (signed mean), coverage rate, boundary length, hole count, stitching angle
+- **Precision**: Pairwise RMS between scan repetitions per scanner per group
+- **Summary**: Aggregated trueness statistics per scanner per group
 
 ### Integration
 - Load pre-computed transforms from DentScanAlign
@@ -98,30 +99,31 @@ serve different use cases:
 | `--roi-template`, `-r` | Optional ROI template with tooth segmentation settings |
 | `--alignments`, `-a` | Directory containing DentScanAlign JSON transform files |
 | `--external-ref`, `-e` | External reference STL (CAD or lab scanner) |
-| `--pre-aligned` | Skip GPA computation (scans already coarsely aligned) |
+| `--pre-aligned` | Skip GPA; treat scans as already in a common frame, run ICP refinement only |
+| `--normalized` | Geometry already contains the baked transform; skip JSON transform loading |
 | `--verbose` | Print detailed progress information |
 
 ---
 
 ## Study Configuration (JSON)
 
+The `group.id` field is a free-form string label — use SKD values for phantom studies or patient IDs for clinical studies. The `skd_mm` integer field is ignored in output; `Group_ID` from `id` appears in all CSVs.
+
+**Phantom study (SKD levels):**
 ```json
 {
-  "study": {
-    "name": "Scanner_Comparison_2024",
-    "description": "6 scanners × 7 SKD levels"
-  },
+  "study": { "name": "P2024-Kessler", "version": 1, "reference_strategy": "gpa_mean" },
   "scanners": [
-    {"id": "Primescan", "patterns": ["*Primescan*", "*PS*"]},
-    {"id": "Trios5", "patterns": ["*Trios*", "*T5*"]},
-    {"id": "iTeroLumina", "patterns": ["*iTero*", "*Lumina*"]}
+    {"id": "Primescan",   "patterns": ["*Primescan*"]},
+    {"id": "Trios4",      "patterns": ["*Trios*4*"]},
+    {"id": "iTeroLumina", "patterns": ["*iTero*"]}
   ],
   "groups": [
     {"id": "SKD_20", "skd_mm": 20, "file_patterns": ["**/SKD_20/*.stl"]},
-    {"id": "SKD_22", "skd_mm": 22, "file_patterns": ["**/SKD_22/*.stl"]},
-    {"id": "SKD_24", "skd_mm": 24, "file_patterns": ["**/SKD_24/*.stl"]}
+    {"id": "SKD_22", "skd_mm": 22, "file_patterns": ["**/SKD_22/*.stl"]}
   ],
   "output": {
+    "base_dir": "./results",
     "metrics_csv": "trueness_metrics.csv",
     "precision_csv": "precision_metrics.csv",
     "summary_csv": "summary_stats.csv"
@@ -129,20 +131,69 @@ serve different use cases:
 }
 ```
 
+**Patient study (mixed-effects design):**
+```json
+{
+  "study": { "name": "P2026-Nold", "version": 1, "reference_strategy": "gpa_mean",
+             "scans_normalized": true },
+  "scanners": [
+    {"id": "Carestream3700", "patterns": ["Carestream3700*"]},
+    {"id": "Medit700",       "patterns": ["Medit700*"]},
+    {"id": "Primescan",      "patterns": ["Primescan*"]},
+    {"id": "Trios3",         "patterns": ["Trios3*"]}
+  ],
+  "groups": [
+    {"id": "002", "skd_mm": 0, "file_patterns": ["*_002_*_aligned.stl"]},
+    {"id": "003", "skd_mm": 0, "file_patterns": ["*_003_*_aligned.stl"]}
+  ],
+  "output": {
+    "base_dir": "./results_P2026_Nold",
+    "metrics_csv": "trueness_metrics.csv",
+    "precision_csv": "precision_metrics.csv",
+    "summary_csv": "summary_stats.csv"
+  }
+}
+```
+
+Use `scripts/gen_nold_study_config.py` to auto-generate the patient study config from a flat directory of `*_aligned.stl` files.
+
 ---
 
 ## Output Files
 
 **trueness_metrics.csv** – One row per scan:
-- Observation_ID, Scanner_Model, SKD_Value, Repetition_ID
-- Trueness_RMS_mm, Trueness_MeanAbs_mm, Trueness_Max_mm, Trueness_P95_mm
-- Signed_Mean_mm, Coverage_Rate_pct, Vertices_Included, Vertices_Total, File_Path
 
-**precision_metrics.csv** – One row per scanner per SKD:
-- Scanner_Model, SKD_Value, Precision_MeanRMS_mm, Precision_SD_mm, Coefficient_of_Variation, Pairwise_Count
+| Column | Description |
+|--------|-------------|
+| Observation_ID | Sequential integer |
+| Scanner_Model | Scanner identifier |
+| Group_ID | Group label (SKD level, patient ID, etc.) |
+| Repetition_ID | Repetition number extracted from filename |
+| Triangles | Face count |
+| Edge_mm | Mean triangle edge length (mm) |
+| AspRatio | Mean triangle aspect ratio (max/min edge) |
+| MaxAspRatio | Maximum triangle aspect ratio |
+| ATI | Adaptive Tessellation Index (Spearman correlation of curvature vs. triangle area) |
+| DensHighK | Triangle density at high-curvature regions |
+| DensLowK | Triangle density at low-curvature regions |
+| RMS_mm | Root mean square distance to GPA reference (mm) |
+| MAD_mm | Mean absolute deviation (mm) |
+| H100_mm | Hausdorff distance 100th percentile (mm) |
+| H95_mm | Hausdorff distance 95th percentile (mm) |
+| Bias_mm | Signed mean distance — positive = scan outside reference (mm) |
+| Coverage_pct | Percentage of reference surface covered |
+| Boundary_mm | Total open boundary edge length (mm) |
+| Holes | Number of topological holes |
+| Stitch_deg | Maximum stitching angle at open boundaries (degrees) |
+| Vertices_Included | Vertices passing ROI filter |
+| Vertices_Total | Total vertices in mesh |
+| File_Path | Absolute path to source STL/OBJ file |
 
-**summary_stats.csv** – Aggregated trueness statistics:
-- Scanner_Model, SKD_Value, N, Mean_RMS_mm, SD_RMS_mm, Min_RMS_mm, Max_RMS_mm
+**precision_metrics.csv** – One row per scanner per group:
+- Scanner_Model, Group_ID, Precision_MeanRMS_mm, Precision_SD_mm, Coefficient_of_Variation, Pairwise_Count
+
+**summary_stats.csv** – Aggregated trueness statistics per scanner per group:
+- Scanner_Model, Group_ID, N, Mean_RMS_mm, SD_RMS_mm, Min_RMS_mm, Max_RMS_mm
 
 ---
 
@@ -172,6 +223,7 @@ make -j4
 ## Documentation
 
 - [User Manual](docs/user-manual.md) – Complete workflow guide
+- [Study Config Reference](docs/study-config-reference.md) – JSON configuration field reference
 - [Developer Handoff](docs/developer-handoff.md) – Architecture, algorithms, changelog
 - [Metric Interpretation](docs/metric-interpretation.md) – Understanding output values
 - [QC Workflow](docs/QC-WORKFLOW-PLAN.md) – Quality control procedures

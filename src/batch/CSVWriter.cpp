@@ -28,8 +28,8 @@ QString CSVWriter::escapeCSV(const QString& str) {
 
 void CSVWriter::writeTruenessHeader(QTextStream& out) {
     // Tessellation metrics
-    out << "Observation_ID,Scanner_Model,SKD_Value,Repetition_ID,"
-        << "Triangles,Edge_mm,AspRatio,ATI,DensHighK,DensLowK,"
+    out << "Observation_ID,Scanner_Model,Group_ID,Repetition_ID,"
+        << "Triangles,Edge_mm,AspRatio,MaxAspRatio,ATI,DensHighK,DensLowK,"
         // Accuracy metrics
         << "RMS_mm,MAD_mm,H100_mm,H95_mm,Bias_mm,"
         // Completeness metrics
@@ -39,7 +39,7 @@ void CSVWriter::writeTruenessHeader(QTextStream& out) {
 }
 
 void CSVWriter::writePrecisionHeader(QTextStream& out) {
-    out << "Scanner_Model,SKD_Value,Precision_MeanRMS_mm,Precision_SD_mm,"
+    out << "Scanner_Model,Group_ID,Precision_MeanRMS_mm,Precision_SD_mm,"
         << "Coefficient_of_Variation,Pairwise_Count\n";
 }
 
@@ -63,12 +63,13 @@ bool CSVWriter::writeTruenessCSV(
     for (const auto& report : reports) {
         out << obsId++ << ","
             << escapeCSV(QString::fromStdString(report.scannerName)) << ","
-            << report.skd_mm << ","
+            << escapeCSV(report.groupId) << ","
             << report.repetitionId << ","
             // Tessellation metrics
             << report.triangleCount << ","
             << QString::number(report.meanEdgeLength, 'f', 4) << ","
             << QString::number(report.meanAspectRatio, 'f', 3) << ","
+            << QString::number(report.maxAspectRatio, 'f', 3) << ","
             << QString::number(report.ati, 'f', 3) << ","
             << QString::number(report.densityHighCurv, 'f', 2) << ","
             << QString::number(report.densityLowCurv, 'f', 2) << ","
@@ -122,12 +123,13 @@ bool CSVWriter::appendTruenessCSV(
     for (const auto& report : reports) {
         out << obsId++ << ","
             << escapeCSV(QString::fromStdString(report.scannerName)) << ","
-            << report.skd_mm << ","
+            << escapeCSV(report.groupId) << ","
             << report.repetitionId << ","
             // Tessellation metrics
             << report.triangleCount << ","
             << QString::number(report.meanEdgeLength, 'f', 4) << ","
             << QString::number(report.meanAspectRatio, 'f', 3) << ","
+            << QString::number(report.maxAspectRatio, 'f', 3) << ","
             << QString::number(report.ati, 'f', 3) << ","
             << QString::number(report.densityHighCurv, 'f', 2) << ","
             << QString::number(report.densityLowCurv, 'f', 2) << ","
@@ -169,7 +171,7 @@ bool CSVWriter::writePrecisionCSV(
     // Data rows
     for (const auto& report : reports) {
         out << escapeCSV(report.scannerId) << ","
-            << report.skd_mm << ","
+            << escapeCSV(report.groupId) << ","
             << QString::number(report.meanRMS, 'f', 4) << ","
             << QString::number(report.sdRMS, 'f', 4) << ","
             << QString::number(report.cv, 'f', 4) << ","
@@ -206,7 +208,7 @@ bool CSVWriter::appendPrecisionCSV(
     // Data rows
     for (const auto& report : reports) {
         out << escapeCSV(report.scannerId) << ","
-            << report.skd_mm << ","
+            << escapeCSV(report.groupId) << ","
             << QString::number(report.meanRMS, 'f', 4) << ","
             << QString::number(report.sdRMS, 'f', 4) << ","
             << QString::number(report.cv, 'f', 4) << ","
@@ -231,7 +233,7 @@ bool CSVWriter::writeSummaryCSV(
     // Group reports by Scanner×SKD
     struct Summary {
         QString scanner;
-        int skd = 0;
+        QString groupId;
         int count = 0;
         double sumRMS = 0.0;
         double sumRMS2 = 0.0;
@@ -239,13 +241,13 @@ bool CSVWriter::writeSummaryCSV(
         double maxRMS = std::numeric_limits<double>::lowest();
     };
 
-    std::map<std::pair<std::string, int>, Summary> groups;
+    std::map<std::pair<std::string, std::string>, Summary> groups;
 
     for (const auto& report : reports) {
-        auto key = std::make_pair(report.scannerName, report.skd_mm);
+        auto key = std::make_pair(report.scannerName, report.groupId.toStdString());
         auto& s = groups[key];
         s.scanner = QString::fromStdString(report.scannerName);
-        s.skd = report.skd_mm;
+        s.groupId = report.groupId;
         s.count++;
         s.sumRMS += report.rmsDistance;
         s.sumRMS2 += report.rmsDistance * report.rmsDistance;
@@ -254,7 +256,7 @@ bool CSVWriter::writeSummaryCSV(
     }
 
     // Header
-    out << "Scanner_Model,SKD_Value,N,Mean_RMS_mm,SD_RMS_mm,Min_RMS_mm,Max_RMS_mm\n";
+    out << "Scanner_Model,Group_ID,N,Mean_RMS_mm,SD_RMS_mm,Min_RMS_mm,Max_RMS_mm\n";
 
     // Data rows
     for (const auto& [key, s] : groups) {
@@ -266,7 +268,7 @@ bool CSVWriter::writeSummaryCSV(
         }
 
         out << escapeCSV(s.scanner) << ","
-            << s.skd << ","
+            << escapeCSV(s.groupId) << ","
             << s.count << ","
             << QString::number(mean, 'f', 4) << ","
             << QString::number(sd, 'f', 4) << ","

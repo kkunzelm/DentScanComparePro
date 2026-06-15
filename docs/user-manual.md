@@ -2,7 +2,7 @@
 
 ## Overview
 
-DentScanComparePro is a tool for automated batch evaluation of dental intraoral scanner accuracy. It computes ISO 5725/12836-compliant trueness and precision metrics across multiple scanners and clinical conditions (SKD levels = inter-incisor distance).
+DentScanComparePro is a tool for automated batch evaluation of dental intraoral scanner accuracy. It computes ISO 5725/12836-compliant trueness and precision metrics across multiple scanners and study groups (SKD levels in phantom studies, patient IDs in clinical cohort studies, or any other grouping label).
 
 The application supports two modes:
 - **GUI Mode** (default): Interactive interface for configuration, ROI template editing, and QC review
@@ -49,31 +49,39 @@ data/
 
 ### Step 2: Create a Study Configuration
 
-Create a JSON file describing your study:
+Create a JSON file describing your study. For a full field-by-field reference see
+[docs/study-config-reference.md](study-config-reference.md).
 
 ```json
 {
   "study": {
     "name": "Scanner_Comparison_2024",
-    "description": "Comparing 6 intraoral scanners across SKD levels"
+    "version": 1,
+    "reference_strategy": "gpa_mean",
+    "scans_normalized": true
   },
   "scanners": [
-    {"id": "Primescan", "patterns": ["*Primescan*", "*PS*"]},
-    {"id": "Trios5", "patterns": ["*Trios*", "*T5*"]},
+    {"id": "Primescan",   "patterns": ["*Primescan*"]},
+    {"id": "Trios4",      "patterns": ["*Trios*4*"]},
     {"id": "iTeroLumina", "patterns": ["*iTero*", "*Lumina*"]}
   ],
   "groups": [
-    {"id": "SKD_20", "skd_mm": 20, "file_patterns": ["**/SKD_20/*.stl", "**/20mm/*.stl"]},
+    {"id": "SKD_20", "skd_mm": 20, "file_patterns": ["**/SKD_20/*.stl"]},
     {"id": "SKD_22", "skd_mm": 22, "file_patterns": ["**/SKD_22/*.stl"]},
     {"id": "SKD_24", "skd_mm": 24, "file_patterns": ["**/SKD_24/*.stl"]}
   ],
   "output": {
+    "base_dir": "./results",
     "metrics_csv": "trueness_metrics.csv",
-    "precision_csv": "precision_matrix.csv",
-    "summary_csv": "summary_by_scanner_skd.csv"
+    "precision_csv": "precision_metrics.csv",
+    "summary_csv": "summary_stats.csv"
   }
 }
 ```
+
+The `group.id` field is a free-form string label: use SKD values for phantom studies or
+patient IDs for clinical cohort studies. The software works with two factors as well as
+three — see the Study Config Reference for details.
 
 ### Step 3: Create an ROI Template (Optional but Recommended)
 
@@ -300,8 +308,10 @@ GUI: uncheck **"Scans are normalized"**, check **"Scans are pre-aligned, use JSO
 | `trueness_metrics.csv` | Per-scan metrics, QC-filtered (errands excluded) |
 | `trueness_metrics_all.csv` | Per-scan metrics, all scans including errands |
 | `long_format_metrics.csv` | Per-scan metrics written directly by the batch runner |
-| `precision_matrix.csv` | Per-scanner-per-SKD pairwise precision |
-| `summary_by_scanner_skd.csv` | Aggregated RMS statistics by scanner and SKD |
+| `precision_metrics.csv` | Per-scanner-per-group pairwise precision |
+| `summary_stats.csv` | Aggregated RMS statistics by scanner and group |
+
+Filenames for precision and summary are configured in the `output` section of your study JSON. The names above match the recommended convention.
 
 See **Appendix A — Output CSV Reference** for a full description of every column in every file.
 
@@ -508,8 +518,8 @@ This button re-derives all output CSVs from scratch using only the information s
 |-------|-----------|-------|
 | Parse all JSONs | Reads every `qc/transforms/*.json` and extracts metrics + transform matrices | Near-instant |
 | Write trueness CSVs | Aggregates per-scan metrics from the JSON data. No STL files are reloaded for this phase. | Fast |
-| Recompute precision | Reloads original STL files, applies stored transforms, builds AABB reference trees per group, and recomputes all pairwise inter-scan RMS distances within each scanner×SKD cell | Slow — same computational cost as the original batch run |
-| Write summary CSV | Computes scanner×SKD mean, SD, min, max from the trueness results | Fast |
+| Recompute precision | Reloads original STL files, applies stored transforms, builds AABB reference trees per group, and recomputes all pairwise inter-scan RMS distances within each scanner×group cell | Slow — same computational cost as the original batch run |
+| Write summary CSV | Computes scanner×group mean, SD, min, max from the trueness results | Fast |
 
 **Files overwritten:**
 
@@ -518,8 +528,8 @@ This button re-derives all output CSVs from scratch using only the information s
 | `long_format_metrics.csv` | All scans, all metrics (no QC filter) |
 | `trueness_metrics_all.csv` | All scans including errands (pre-QC view) |
 | `trueness_metrics.csv` | Only QC-accepted scans — errands excluded |
-| `precision_matrix.csv` | Pairwise precision per scanner×SKD, errands excluded from all pair computations |
-| `summary_by_scanner_skd.csv` | Mean/SD/Min/Max RMS per scanner×SKD, errands excluded |
+| `precision_metrics.csv` | Pairwise precision per scanner×group, errands excluded from all pair computations |
+| `summary_stats.csv` | Mean/SD/Min/Max RMS per scanner×group, errands excluded |
 
 **Important notes:**
 
@@ -636,6 +646,7 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 | **Triangles** | `Triangles` | Total triangular faces in the mesh |
 | **Edge** | `Edge_mm` | Mean edge length (mm). Smaller = finer mesh |
 | **AspRatio** | `AspRatio` | Mean aspect ratio (longest/shortest edge). 1.0 = equilateral |
+| **MaxAspRatio** | `MaxAspRatio` | Maximum aspect ratio across all triangles. Reveals extreme outlier triangles at boundaries or holes |
 | **ATI** | `ATI` | Adaptive Tessellation Index. Spearman correlation between curvature and 1/area. +1 = ideal adaptive, 0 = uniform |
 | **DensHighκ** | `DensHighK` | Triangle density in high-curvature zones (triangles/mm²) |
 | **DensLowκ** | `DensLowK` | Triangle density in low-curvature zones (triangles/mm²) |
@@ -659,7 +670,7 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 | **Holes** | `Holes` | Number of topological holes (open boundary loops) |
 | **Stitch** | `Stitch_deg` | Maximum normal discontinuity angle (°). High values indicate stitching artifacts |
 
-### Precision Metrics (per scanner per SKD)
+### Precision Metrics (per scanner per group)
 
 | Metric | Description |
 |--------|-------------|
@@ -806,11 +817,12 @@ All CSV files are written with a UTF-8 BOM so that they open correctly in Micros
 |--------|------|-------------|
 | `Observation_ID` | — | Sequential integer row counter, starting at 1 |
 | `Scanner_Model` | — | Scanner name as defined in the study configuration |
-| `SKD_Value` | mm | Inter-incisor distance (SKD level) of this condition |
-| `Repetition_ID` | — | Repetition number within the Scanner × SKD cell |
+| `Group_ID` | — | Group identifier (SKD level, patient ID, or any other label defined in the study config) |
+| `Repetition_ID` | — | Repetition number within the Scanner × Group cell |
 | `Triangles` | — | Number of triangular faces in the scan mesh |
 | `Edge_mm` | mm | Mean edge length across all triangles (mesh resolution proxy — smaller = finer) |
 | `AspRatio` | — | Mean triangle aspect ratio (longest / shortest edge). 1.0 = equilateral triangle, the ideal |
+| `MaxAspRatio` | — | Maximum triangle aspect ratio across the entire mesh. Reveals extreme outlier triangles at scan boundaries or topological holes |
 | `ATI` | — | Adaptive Tessellation Index. Spearman correlation between local curvature and triangle density (1/area). +1.0 = perfectly adaptive mesh; 0 = uniform tessellation regardless of curvature |
 | `DensHighK` | triangles/mm² | Triangle density measured in high-curvature zones (cusp tips, ridges). Higher = finer detail where it matters |
 | `DensLowK` | triangles/mm² | Triangle density measured in low-curvature zones (flat surfaces). Should be lower than DensHighK for an adaptive mesh |
@@ -852,11 +864,13 @@ In practice, once you have run QC review and rebuilding, `trueness_metrics.csv` 
 
 ---
 
-### `precision_matrix.csv`
+### `precision_metrics.csv`
+
+(Filename is configured via `precision_csv` in the `output` section of your study JSON.)
 
 **When written:** After batch processing (by the batch runner) and after every **Rebuild Metrics from Transforms** operation.
 
-**What it contains:** One row per Scanner × SKD cell. Each row summarises the **within-cell pairwise precision** — how consistent the same scanner is across repeated measurements under the same conditions. Precision is computed as the mean of all pairwise RMS distances between the N repetitions in the cell. For N = 5 repetitions, this involves 10 unique scan pairs.
+**What it contains:** One row per Scanner × Group cell. Each row summarises the **within-cell pairwise precision** — how consistent the same scanner is across repeated measurements under the same conditions. Precision is computed as the mean of all pairwise RMS distances between the N repetitions in the cell. For N = 5 repetitions, this involves 10 unique scan pairs.
 
 Scans in Errand status are excluded from all pair computations. If an errand is unresolved in a cell with 5 repetitions, that cell has only 4 valid scans and therefore only 6 pairs; the Pairwise_Count column reflects this.
 
@@ -865,19 +879,21 @@ Scans in Errand status are excluded from all pair computations. If an errand is 
 | Column | Unit | Description |
 |--------|------|-------------|
 | `Scanner_Model` | — | Scanner name |
-| `SKD_Value` | mm | SKD level |
+| `Group_ID` | — | Group identifier (SKD level, patient ID, or any label from the study config) |
 | `Precision_MeanRMS_mm` | mm | Mean of all pairwise RMS distances within this cell. **The primary precision metric** (corresponds to ISO 5725 repeatability standard deviation when computed on repeated measurements) |
 | `Precision_SD_mm` | mm | Standard deviation of the pairwise RMS values. Measures how variable the pairwise distances are — high SD suggests inconsistent scan quality |
-| `Coefficient_of_Variation` | — | SD / Mean (dimensionless). Allows precision comparison across scanners and SKD levels on a relative scale |
+| `Coefficient_of_Variation` | — | SD / Mean (dimensionless). Allows precision comparison across scanners and groups on a relative scale |
 | `Pairwise_Count` | — | Number of scan pairs used in the computation. For N repetitions: N×(N−1)/2 pairs |
 
 ---
 
-### `summary_by_scanner_skd.csv`
+### `summary_stats.csv`
+
+(Filename is configured via `summary_csv` in the `output` section of your study JSON.)
 
 **When written:** After batch processing and after every **Rebuild Metrics from Transforms** operation.
 
-**What it contains:** One row per Scanner × SKD cell, summarising the RMS trueness distribution across all accepted repetitions in that cell. This is the highest-level aggregated view of trueness results — one number per experimental condition.
+**What it contains:** One row per Scanner × Group cell, summarising the RMS trueness distribution across all accepted repetitions in that cell. This is the highest-level aggregated view of trueness results — one number per experimental condition.
 
 Errands are excluded (same filter as `trueness_metrics.csv`).
 
@@ -886,8 +902,8 @@ Errands are excluded (same filter as `trueness_metrics.csv`).
 | Column | Unit | Description |
 |--------|------|-------------|
 | `Scanner_Model` | — | Scanner name |
-| `SKD_Value` | mm | SKD level |
-| `N` | — | Number of accepted scans in this cell. Should be 5 in a balanced design; fewer if errands were not resolved |
+| `Group_ID` | — | Group identifier (SKD level, patient ID, or any label from the study config) |
+| `N` | — | Number of accepted scans in this cell. Should equal the number of repetitions in a balanced design; fewer if errands were not resolved |
 | `Mean_RMS_mm` | mm | Arithmetic mean of per-scan RMS values across repetitions |
 | `SD_RMS_mm` | mm | Sample standard deviation of per-scan RMS values (denominator N−1) |
 | `Min_RMS_mm` | mm | Minimum per-scan RMS in this cell |
@@ -901,9 +917,9 @@ Errands are excluded (same filter as `trueness_metrics.csv`).
 |---------------|-----------------|
 | Per-scan statistical model (main analysis) | `trueness_metrics.csv` |
 | Checking what errands were excluded | `trueness_metrics_all.csv` |
-| Precision / repeatability analysis | `precision_matrix.csv` |
-| Quick descriptive table for a paper | `summary_by_scanner_skd.csv` |
-| R analysis script (`analyze_results.R`) | reads `trueness_metrics.csv`, `precision_matrix.csv`, `summary_by_scanner_skd.csv` |
+| Precision / repeatability analysis | `precision_metrics.csv` |
+| Quick descriptive table for a paper | `summary_stats.csv` |
+| R analysis script (`analyze_results_Nold.R`) | reads `trueness_metrics.csv`, `precision_metrics.csv`, `summary_stats.csv` |
 
 ---
 

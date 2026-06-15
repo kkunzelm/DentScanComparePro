@@ -1,0 +1,10 @@
+  Skript ausführen
+
+  Das Skript liegt in scripts/reorganize_scans_generic.py und wurde im Git-Projekt gespeichert. Für
+  den echten Kopiervorgang:
+
+  python3 scripts/reorganize_scans_generic.py --execute
+
+  Optionaler anderer Zielordner:
+  python3 scripts/reorganize_scans_generic.py --execute --output /anderer/pfad/flat
+

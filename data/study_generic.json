@@ -1,0 +1,41 @@
+{
+  "study_name": "StudyName",
+  "description": "Dental intraoral scanner accuracy study (trueness & precision per ISO 12836)",
+  "scan_directory": "/path/to/scan/data/flat",
+  "filename_pattern": "{scanner}_{patient}_{repetition}.{ext}",
+  "factors": {
+    "scanner": [
+      "Carestream3700",
+      "Medit700",
+      "Primescan",
+      "Trios3"
+    ],
+    "patient": [
+      "002",
+      "003"
+    ],
+    "repetition": [
+      "D1",
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D6",
+      "D7"
+    ]
+  },
+  "file_formats": {
+    "Trios3": "ply",
+    "Medit700": "ply",
+    "Carestream3700": "ply",
+    "Primescan": "obj"
+  },
+  "observations": [
+    {
+      "scanner": "Scanner1",
+      "patient": "002",
+      "repetition": "D1",
+      "file": "Scanner1_002_D1.ply"
+    }
+  ]
+}

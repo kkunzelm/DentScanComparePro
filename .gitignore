@@ -51,3 +51,12 @@ Thumbs.db
 docs/*
 !docs/user-manual.md
 !docs/metric-interpretation.md
+
+# Study-specific scripts with individual paths (use *_generic.* versions instead)
+scripts/reorganize_scans.py
+scripts/gen_nold_study_config.py
+scripts/analyze_results_Nold.R
+scripts/howto-reorganize_scans_Nold.txt
+
+# Study-specific data files with individual paths (use *_generic.* versions instead)
+data/P2026-Nold-study.json
