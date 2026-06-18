@@ -99,7 +99,7 @@ serve different use cases:
 | `--roi-template`, `-r` | Optional ROI template with tooth segmentation settings |
 | `--alignments`, `-a` | Directory containing DentScanAlign JSON transform files |
 | `--external-ref`, `-e` | External reference STL (CAD or lab scanner) |
-| `--pre-aligned` | Skip GPA; treat scans as already in a common frame, run ICP refinement only |
+| `--pre-aligned` | Skip GPA; run one ICP pass per scan then compute mean mesh. Also skips curvature/tessellation metrics unless a ROI tooth mask is active. Use with DentScanAlignPro normalized output. |
 | `--normalized` | Geometry already contains the baked transform; skip JSON transform loading |
 | `--verbose` | Print detailed progress information |
 

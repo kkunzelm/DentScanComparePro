@@ -106,21 +106,9 @@ void computeBounds(const SurfaceMesh& mesh, double bounds[6])
 bool QCExporter::createQCDirectories(const QString& outputDir)
 {
     QDir dir(outputDir);
-    if (!dir.exists("qc")) {
-        if (!dir.mkdir("qc")) return false;
-    }
-
-    QDir qcDir(outputDir + "/qc");
-    if (!qcDir.exists("reference_meshes")) {
-        if (!qcDir.mkdir("reference_meshes")) return false;
-    }
-    if (!qcDir.exists("difference_images")) {
-        if (!qcDir.mkdir("difference_images")) return false;
-    }
-    if (!qcDir.exists("transforms")) {
-        if (!qcDir.mkdir("transforms")) return false;
-    }
-
+    if (!dir.mkpath("qc/reference_meshes")) return false;
+    if (!dir.mkpath("qc/difference_images")) return false;
+    if (!dir.mkpath("qc/transforms")) return false;
     return true;
 }
 

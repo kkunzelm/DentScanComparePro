@@ -83,6 +83,16 @@ Eigen::Matrix4d pcaCoarseAlign(ScanData& scan)
         }
     }
 
+    // Resolve X-sign: force X-axis to align with the canonical +X direction of the
+    // input data.  Without this, Eigen's eigensolver returns an arbitrary sign for
+    // the largest-variance eigenvector, which makes the GPA frame 180° inconsistent
+    // between groups (equivalent to a 180° rotation around Z).  Flipping both X and
+    // Y preserves right-handedness while fixing the arch facing direction.
+    if (R.col(0).dot(Eigen::Vector3d(1.0, 0.0, 0.0)) < 0.0) {
+        R.col(0) = -R.col(0);
+        R.col(1) = -R.col(1);
+    }
+
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
     T.block<3,3>(0,0) = R.transpose();
     T.block<3,1>(0,3) = -(R.transpose() * mu);

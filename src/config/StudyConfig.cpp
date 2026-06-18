@@ -145,6 +145,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.referenceStrategy = study["reference_strategy"].toString("gpa_mean");
     config.externalReferencePath = study["external_reference_path"].toString();
     config.scansPreAligned = study["scans_pre_aligned"].toBool(false);
+    config.metrics.computePrecision = study["compute_precision"].toBool(true);
     config.scansNormalized = study["scans_normalized"].toBool(true);
     config.alignmentsDirectory = study["alignments_directory"].toString();
 

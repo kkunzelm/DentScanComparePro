@@ -17,6 +17,7 @@
 #include <numeric>
 #include <map>
 #include <iostream>
+#include <iomanip>
 
 namespace DentScanBatch {
 
@@ -38,7 +39,8 @@ GroupResult GroupProcessor::process(
     const QString& externalRefPath,
     bool scansPreAligned,
     const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms,
-    bool forceFullMesh)
+    bool forceFullMesh,
+    bool computePrecision)
 {
     GroupResult result;
     result.groupId = group.id;
@@ -47,10 +49,13 @@ GroupResult GroupProcessor::process(
     m_currentStep = 0;
 
     // Calculate total steps based on options
-    // New order: Load, Curvature, ToothMasks (if enabled), Alignment, Distances, Trueness, Precision
-    int steps = 5; // Load, Curvature, Distances, Trueness, Precision
-    if (!scansPreAligned && externalRefPath.isEmpty()) {
-        steps++; // GPA alignment
+    // Curvature is skipped when scans are pre-aligned and no ROI tooth mask is needed
+    bool needCurvature = !scansPreAligned || (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty());
+
+    int steps = 4; // Load, Distances, Trueness, Precision
+    if (needCurvature) steps++; // Curvature + tessellation
+    if (externalRefPath.isEmpty()) {
+        steps++; // GPA alignment or pre-aligned ICP refinement
     }
     if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
         steps++; // Tooth segmentation (now before alignment)
@@ -70,9 +75,15 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 2: Compute curvature (needed for occlusal plane detection and tooth segmentation)
-    if (!computeCurvature(scans, result)) {
-        return result;
+    // Stage 2: Compute curvature (needed for GPA Z-sign resolution and tooth segmentation)
+    // Skipped when scans are pre-aligned and no ROI tooth mask is active —
+    // DentScanAlignPro has already resolved canonical orientation, making curvature redundant.
+    if (needCurvature) {
+        if (!computeCurvature(scans, result)) {
+            return result;
+        }
+    } else {
+        std::cout << "    Curvature: SKIPPED (pre-aligned, no tooth mask)\n" << std::flush;
     }
 
     if (wasCancelled()) return result;
@@ -208,9 +219,45 @@ GroupResult GroupProcessor::process(
         }
         std::cout << " done\n" << std::flush;
     } else {
-        // Run GPA alignment (original behavior)
-        if (!runGPAAlignment(scans, alignment, referenceMesh, result)) {
-            return result;
+        if (scansPreAligned) {
+            // Pre-aligned: run ICP refinement against scan with most triangles, then compute mean mesh
+            emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement (pre-aligned)");
+            std::cout << "    Pre-aligned mode: running ICP refinement..." << std::flush;
+
+            auto refIt = std::max_element(scans.begin(), scans.end(),
+                [](const auto& a, const auto& b){ return a->triangleCount < b->triangleCount; });
+
+            ScanData refData;
+            refData.mesh = (*refIt)->mesh;
+            refData.registered = true;
+
+            ICPRegistration::Params icpParams;
+            icpParams.maxIterations = alignment.maxIcpIterations;
+            icpParams.maxCorrespDist = 5.0;
+            icpParams.convergenceRms = alignment.convergenceThreshold;
+
+            for (auto& scan : scans) {
+                if (wasCancelled()) return result;
+                auto r = ICPRegistration::align(*scan, refData, icpParams);
+                if (r.converged)
+                    ICPRegistration::applyTransform(*scan, r.transform);
+                scan->registered = true;
+                std::cout << "\n      " << scan->scannerName
+                          << "  RMS=" << std::fixed << std::setprecision(4) << r.finalRms << " mm"
+                          << "  iter=" << r.iterations
+                          << (r.converged ? "" : "  [NOT CONVERGED]") << std::flush;
+            }
+            std::cout << "\n    done\n" << std::flush;
+
+            ScanData gpaMeanData;
+            gpaMeanData.mesh = (*refIt)->mesh;
+            GPAReference::updateMeanMesh(gpaMeanData, scans);
+            referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
+        } else {
+            // Run GPA alignment (original behavior)
+            if (!runGPAAlignment(scans, alignment, referenceMesh, result)) {
+                return result;
+            }
         }
     }
     result.gpaMean = referenceMesh;
@@ -238,9 +285,13 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 7: Compute precision metrics
-    emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
-    computePrecisionMetrics(scans, files, metricsROI, group, toothMasks, result);
+    // Stage 7: Compute precision metrics (optional — skip when compute_precision=false)
+    if (computePrecision) {
+        emit progressUpdated(++m_currentStep, m_totalSteps, "Computing precision metrics");
+        computePrecisionMetrics(scans, files, metricsROI, group, toothMasks, result);
+    } else {
+        std::cout << "    Precision metrics: SKIPPED (compute_precision=false)\n" << std::flush;
+    }
 
     if (wasCancelled()) return result;
 

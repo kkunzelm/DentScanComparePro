@@ -627,7 +627,7 @@ Options:
   -r, --roi-template <file> ROI template with tooth segmentation settings
   -a, --alignments <dir>   Directory with DentScanAlign JSON transforms
   -e, --external-ref <file> External reference STL (CAD or lab scanner)
-  --pre-aligned            Skip GPA; apply JSON transforms before ICP refinement
+  --pre-aligned            Skip GPA; run one ICP refinement pass then compute mean mesh
   --normalized             Scans are normalized; skip JSON transform loading (default in GUI)
   --verbose                Print detailed progress information
   -h, --help               Show help message
@@ -686,16 +686,19 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 The batch processor executes these stages for each SKD group:
 
 1. **Load STL files** - Parse binary STL into CGAL meshes
-2. **Compute curvature** - CGAL interpolated curvatures for segmentation
-3. **Compute tessellation metrics** - ATI, edge length, aspect ratio, curvature densities
-4. **Compute Base Selection** (if ROI template provided) - Dijkstra-based segmentation from seeds
-5. **Apply pre-computed transforms** (if `--alignments` provided) - Load DentScanAlign results
-6. **Alignment** - GPA or ICP against external reference
+2. **Compute curvature and tessellation metrics** - CGAL interpolated curvatures (mean/Gaussian), ATI, edge length, aspect ratio, curvature densities.
+   **Skipped** when `--pre-aligned` is active and no ROI tooth mask is configured. DentScanAlignPro has already resolved canonical orientation, making curvature redundant for alignment; skipping saves significant time per group.
+3. **Compute Base Selection** (if ROI template provided) - Dijkstra-based segmentation from seeds (requires curvature — not skipped in this case)
+4. **Apply pre-computed transforms** (if `--alignments` provided) - Load DentScanAlign results
+5. **Alignment**:
+   - **GPA** (default): PCA coarse → 4-orientation test → iterative ICP → mean mesh update
+   - **Pre-aligned ICP** (`--pre-aligned`, no external ref): one ICP pass per scan against scan with most triangles → mean mesh update. GPA iterations skipped.
+   - **ICP against external reference** (`--external-ref`): one ICP pass per scan against provided STL
    - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
-7. **Compute distances** - CGAL AABB-tree signed distances to reference
-8. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
-9. **Compute precision metrics** - Pairwise comparisons between repetitions
-10. **Export QC data** - GPA means, transforms, segmented meshes
+6. **Compute distances** - CGAL AABB-tree signed distances to reference
+7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
+8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
+9. **Export QC data** - GPA means, transforms, segmented meshes
 
 ---
 

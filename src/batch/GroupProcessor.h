@@ -100,7 +100,8 @@ public:
         const QString& externalRefPath = QString(),
         bool scansPreAligned = false,
         const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {},
-        bool forceFullMesh = false);
+        bool forceFullMesh = false,
+        bool computePrecision = true);
 
     /**
      * Set external cancellation flag to check during processing.

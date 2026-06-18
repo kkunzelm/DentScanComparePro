@@ -278,7 +278,8 @@ bool BatchRunner::run(
         GroupResult result = processor.process(
             group, files, config.alignment, roiTemplate, outputDir,
             config.externalReferencePath, config.scansPreAligned,
-            precomputedTransforms, forceFullMesh);
+            precomputedTransforms, forceFullMesh,
+            config.metrics.computePrecision);
 
         // Collect warnings and errors
         m_warnings.append(result.warnings);
