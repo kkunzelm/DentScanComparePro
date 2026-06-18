@@ -101,7 +101,8 @@ public:
         bool scansPreAligned = false,
         const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms = {},
         bool forceFullMesh = false,
-        bool computePrecision = true);
+        bool computePrecision = true,
+        bool scansNormalized = false);
 
     /**
      * Set external cancellation flag to check during processing.
@@ -147,7 +148,8 @@ private:
     bool runGPAAlignment(std::vector<std::shared_ptr<ScanData>>& scans,
                          const AlignmentConfig& alignment,
                          std::shared_ptr<SurfaceMesh>& gpaMean,
-                         GroupResult& result);
+                         GroupResult& result,
+                         bool scansNormalized = false);
 
     bool computeDistances(std::vector<std::shared_ptr<ScanData>>& scans,
                           const std::shared_ptr<SurfaceMesh>& gpaMean,

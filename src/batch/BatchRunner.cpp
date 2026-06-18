@@ -279,7 +279,8 @@ bool BatchRunner::run(
             group, files, config.alignment, roiTemplate, outputDir,
             config.externalReferencePath, config.scansPreAligned,
             precomputedTransforms, forceFullMesh,
-            config.metrics.computePrecision);
+            config.metrics.computePrecision,
+            config.scansNormalized);
 
         // Collect warnings and errors
         m_warnings.append(result.warnings);

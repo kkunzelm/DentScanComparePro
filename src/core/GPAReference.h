@@ -20,6 +20,12 @@ struct Params {
     // computing a GPA mean.  The named scanner is never ICP'd; all others
     // are aligned to it.  The mean-mesh update step is skipped.
     std::string fixedRefScannerName;
+
+    // Skip pcaCoarseAlign() and resolveZRotation() when scans are already in
+    // canonical orientation (e.g. from DentScanAlignPro).  Running PCA on
+    // pre-oriented scans can introduce errors when patient geometry produces
+    // eigenvectors at non-axis-aligned angles (e.g. 45° around Z).
+    bool skipPcaCoarseAlign = false;
 };
 
 // Updates the GPA reference mesh vertices to the centroid of closest points

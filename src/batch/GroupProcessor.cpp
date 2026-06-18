@@ -40,7 +40,8 @@ GroupResult GroupProcessor::process(
     bool scansPreAligned,
     const std::map<std::string, Eigen::Matrix4d>& precomputedTransforms,
     bool forceFullMesh,
-    bool computePrecision)
+    bool computePrecision,
+    bool scansNormalized)
 {
     GroupResult result;
     result.groupId = group.id;
@@ -233,11 +234,12 @@ GroupResult GroupProcessor::process(
 
             ICPRegistration::Params icpParams;
             icpParams.maxIterations = alignment.maxIcpIterations;
-            icpParams.maxCorrespDist = 5.0;
+            icpParams.maxCorrespDist = 10.0;  // larger window: cross-scanner centroid offsets can exceed 5mm
             icpParams.convergenceRms = alignment.convergenceThreshold;
 
             for (auto& scan : scans) {
                 if (wasCancelled()) return result;
+
                 auto r = ICPRegistration::align(*scan, refData, icpParams);
                 if (r.converged)
                     ICPRegistration::applyTransform(*scan, r.transform);
@@ -254,8 +256,8 @@ GroupResult GroupProcessor::process(
             GPAReference::updateMeanMesh(gpaMeanData, scans);
             referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
         } else {
-            // Run GPA alignment (original behavior)
-            if (!runGPAAlignment(scans, alignment, referenceMesh, result)) {
+            // Run GPA alignment
+            if (!runGPAAlignment(scans, alignment, referenceMesh, result, scansNormalized)) {
                 return result;
             }
         }
@@ -397,10 +399,14 @@ bool GroupProcessor::runGPAAlignment(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const AlignmentConfig& alignment,
     std::shared_ptr<SurfaceMesh>& gpaMean,
-    GroupResult& result)
+    GroupResult& result,
+    bool scansNormalized)
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Running GPA alignment");
-    std::cout << "    Running GPA alignment..." << std::flush;
+    if (scansNormalized)
+        std::cout << "    Running GPA alignment (PCA skipped — scans normalized)..." << std::flush;
+    else
+        std::cout << "    Running GPA alignment..." << std::flush;
 
     if (scans.size() < 2) {
         result.warnings.append("Need at least 2 scans for GPA alignment");
@@ -417,6 +423,7 @@ bool GroupProcessor::runGPAAlignment(
     params.maxGPAIterations = 20;
     params.convergenceThresh = alignment.convergenceThreshold;
     params.icpParams.maxIterations = alignment.maxIcpIterations;
+    params.skipPcaCoarseAlign = scansNormalized;
 
     // Run GPA
     auto gpaRef = GPAReference::compute(scans, params);

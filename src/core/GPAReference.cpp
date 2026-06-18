@@ -200,8 +200,13 @@ std::shared_ptr<ScanData> compute(
 
     // Step 1: PCA coarse alignment (handles large translational + moderate
     //         rotational offsets between scanner coordinate systems).
-    for (auto& scan : scans)
-        pcaCoarseAlign(*scan);
+    // Skipped when scans are already in canonical orientation (skipPcaCoarseAlign=true,
+    // e.g. from DentScanAlignPro): PCA on pre-oriented scans can introduce errors when
+    // patient geometry produces eigenvectors at non-axis-aligned angles.
+    if (!params.skipPcaCoarseAlign) {
+        for (auto& scan : scans)
+            pcaCoarseAlign(*scan);
+    }
 
     // Initial reference: either the named scanner or the one with the most triangles.
     auto refIt = scans.end();
@@ -221,9 +226,12 @@ std::shared_ptr<ScanData> compute(
 
     // Step 2: Resolve the 180° / 90° Z-rotation ambiguity that PCA leaves.
     //         Compares 4 orientations via a quick ICP evaluation.
-    for (auto& scan : scans) {
-        if (scan.get() == refIt->get()) continue; // reference is already correct
-        resolveZRotation(*scan, *gpaRef);
+    // Skipped together with PCA when scans are pre-oriented.
+    if (!params.skipPcaCoarseAlign) {
+        for (auto& scan : scans) {
+            if (scan.get() == refIt->get()) continue; // reference is already correct
+            resolveZRotation(*scan, *gpaRef);
+        }
     }
 
     // Step 3: GPA iterations with multi-pass ICP (coarse → fine).
