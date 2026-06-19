@@ -149,7 +149,8 @@ private:
                          const AlignmentConfig& alignment,
                          std::shared_ptr<SurfaceMesh>& gpaMean,
                          GroupResult& result,
-                         bool scansNormalized = false);
+                         bool scansNormalized = false,
+                         const std::vector<std::vector<bool>>& icpMasks = {});
 
     bool computeDistances(std::vector<std::shared_ptr<ScanData>>& scans,
                           const std::shared_ptr<SurfaceMesh>& gpaMean,

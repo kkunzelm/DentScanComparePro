@@ -265,17 +265,29 @@ std::shared_ptr<ScanData> compute(
             auto& scan = scans[si];
             if (scan.get() == refIt->get()) continue;
 
+            // Use per-scan mask when available (tooth mask or combined ROI mask).
+            const std::vector<bool>& icpMask =
+                (si < params.scanMasks.size()) ? params.scanMasks[si] : std::vector<bool>();
+            const bool useMask = !icpMask.empty();
+
             // Coarse pass in the first cycle only.
             if (cycle == 0) {
-                auto r0 = ICPRegistration::align(*scan, *gpaRef, coarseP);
+                ICPRegistration::Result r0 = useMask
+                    ? ICPRegistration::alignMasked(*scan, *gpaRef, icpMask, coarseP)
+                    : ICPRegistration::align(*scan, *gpaRef, coarseP);
                 ICPRegistration::applyTransform(*scan, r0.transform);
             }
 
             // Fine pass.
-            auto r1 = ICPRegistration::align(*scan, *gpaRef, fineP,
-                [&](int it, double rms){
-                    if (progressCallback) progressCallback(cycle, (int)si, rms);
-                });
+            auto r1 = useMask
+                ? ICPRegistration::alignMasked(*scan, *gpaRef, icpMask, fineP,
+                    [&](int it, double rms){
+                        if (progressCallback) progressCallback(cycle, (int)si, rms);
+                    })
+                : ICPRegistration::align(*scan, *gpaRef, fineP,
+                    [&](int it, double rms){
+                        if (progressCallback) progressCallback(cycle, (int)si, rms);
+                    });
             ICPRegistration::applyTransform(*scan, r1.transform);
             maxDisp = std::max(maxDisp, r1.finalRms);
 

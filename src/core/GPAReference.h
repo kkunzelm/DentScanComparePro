@@ -26,6 +26,13 @@ struct Params {
     // pre-oriented scans can introduce errors when patient geometry produces
     // eigenvectors at non-axis-aligned angles (e.g. 45° around Z).
     bool skipPcaCoarseAlign = false;
+
+    // Per-scan vertex masks for masked ICP during GPA iterations.
+    // Index must match the scans vector passed to compute().
+    // If a mask is empty or the index is out of range, full-mesh ICP is used
+    // for that scan.  Masks are kept fixed across GPA cycles (valid for
+    // nearly-aligned scans; tooth masks are vertex-indexed and always valid).
+    std::vector<std::vector<bool>> scanMasks;
 };
 
 // Updates the GPA reference mesh vertices to the centroid of closest points

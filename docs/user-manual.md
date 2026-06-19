@@ -114,7 +114,8 @@ The ROI (Region of Interest) is built from multiple layers that combine to deter
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  FINAL ROI → used for ICP alignment and metric computation      │
+│  FINAL ROI → used for BOTH ICP alignment AND metric computation │
+│  (any active component triggers masked ICP for all paths)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -234,18 +235,29 @@ The **"Use ROI mask for registration (masked ICP)"** checkbox controls whether R
 - Metrics are computed on the entire mesh
 - Console shows: `Full-mesh mode: ACTIVE (ignoring ROI settings from config)`
 
+**Batch log — ROI template status messages:**
+
+| Message | Meaning |
+|---------|---------|
+| `ROI template active: bbox, z-plane — masked ICP + restricted metrics` | One or more ROI components are active; masked ICP and restricted metrics will be used |
+| `ROI template active: 14 tooth seeds — masked ICP + restricted metrics` | Tooth seeds are active; segmentation will run before alignment |
+| `ROI template: no active components — full-mesh ICP and full-mesh metrics` | Template loaded but nothing is active; equivalent to no template |
+| `Full-mesh mode: ENABLED (ROI template ignored, forceFullMesh=true)` | "Use ROI mask" checkbox is unchecked; template is completely ignored |
+
 **When "Use ROI mask" is CHECKED (Masked ICP Mode):**
 
-Masked ICP uses **all active ROI components** combined with AND logic:
+Masked ICP uses **all active ROI components** combined with AND logic. The same combined mask is applied to every alignment stage (GPA iterations, pre-aligned ICP, external-reference ICP) **and** to metric computation — the two are always consistent:
 
-| Component | Active Toggle | Effect on Masked ICP |
-|-----------|--------------|---------------------|
-| Bounding Box | "Active" checkbox | Only vertices inside box used for alignment |
-| Plane Slab | "Active" checkbox | Only vertices in slab used for alignment |
+| Component | Active Toggle | Effect |
+|-----------|--------------|--------|
+| Bounding Box | "Active" checkbox | Only vertices inside box used for alignment and metrics |
+| Plane Slab | "Active" checkbox | Only vertices in slab used for alignment and metrics |
 | Manual Overrides | (always if present) | Include/exclude specific regions (green/red zones) |
-| Base Selection | "Use Base Selection as ROI" | Only tooth crown vertices used |
+| Base Selection (tooth seeds) | "Use Base Selection as ROI" | Only tooth crown vertices used for alignment and metrics |
 
-**Note:** The Plane Slab is now **inactive by default**. If you want to restrict analysis to the occlusal region, you must explicitly check the "Active" checkbox in the Plane Slab section.
+You do **not** need tooth seeds to activate masked ICP. Enabling the Plane Slab or Bounding Box alone is sufficient to restrict both alignment and metric computation to that region.
+
+**Note:** The Plane Slab is **inactive by default**. If you want to restrict analysis to the occlusal region, you must explicitly check the "Active" checkbox in the Plane Slab section.
 
 **Output Directory Selection:**
 
@@ -255,7 +267,7 @@ Masked ICP uses **all active ROI components** combined with AND logic:
 | Checked | Empty | Results saved to Output Dir |
 | Unchecked | Any | Results saved to Output Dir |
 
-Note: Even when masked ICP is disabled, the ROI template is still used to filter which vertices are included in metric calculations (RMS, precision, etc.).
+Note: When "Use ROI mask" is unchecked, all ROI settings are completely ignored for both alignment and metrics — full-mesh ICP and full-mesh metrics apply.
 
 **CLI Mode:**
 ```bash

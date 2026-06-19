@@ -68,6 +68,11 @@ GroupResult GroupProcessor::process(
         return result;
     }
 
+    // Effective ROI for both ICP masking and metric evaluation.
+    // Computed once here so all stages share the same config.
+    const ROIConfig effectiveROI = (!forceFullMesh && roiTemplate.has_value())
+                                   ? roiTemplate->roi : group.roi;
+
     // Stage 1: Load STL files
     std::vector<std::shared_ptr<ScanData>> scans;
     if (!loadScans(files, scans, result)) {
@@ -125,6 +130,26 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
+    // Build combined ICP masks (geometric ROI + tooth mask) per scan.
+    // These are used during alignment so ICP focuses on the same region
+    // that will be evaluated in the metrics.  Computed once here; kept fixed
+    // across GPA cycles (valid because GPA moves scans by only small amounts).
+    std::vector<std::vector<bool>> icpMasks;
+    if (!forceFullMesh && hasActiveROI(effectiveROI, !toothMasks.empty())) {
+        std::cout << "    Building ICP masks (";
+        if (effectiveROI.bbox.active)              std::cout << "bbox ";
+        if (effectiveROI.zPlane.active)            std::cout << "z-plane ";
+        if (!effectiveROI.brushZones.empty())      std::cout << "brush ";
+        if (!toothMasks.empty())                   std::cout << "teeth";
+        std::cout << ")..." << std::flush;
+        icpMasks.reserve(scans.size());
+        for (std::size_t i = 0; i < scans.size(); ++i) {
+            const std::vector<bool>& tm = (i < toothMasks.size()) ? toothMasks[i] : std::vector<bool>();
+            icpMasks.push_back(computeCombinedICPMask(*scans[i], effectiveROI, tm));
+        }
+        std::cout << " done (" << icpMasks.size() << " masks)\n" << std::flush;
+    }
+
     // Stage 4: Get reference mesh (either external or GPA-computed)
     std::shared_ptr<SurfaceMesh> referenceMesh;
 
@@ -151,31 +176,12 @@ GroupResult GroupProcessor::process(
         // Run ICP alignment against external reference
         emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement against reference");
 
-        // Get effective ROI configuration
-        const ROIConfig& effectiveROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
-        bool hasToothMask = !toothMasks.empty();
+        bool useMaskedICP = !icpMasks.empty();
 
-        // Use masked ICP if any ROI component is active
-        // But respect forceFullMesh flag (user explicitly disabled ROI in GUI)
-        bool useMaskedICP = !forceFullMesh && hasActiveROI(effectiveROI, hasToothMask);
-
-        // Debug logging for ROI state
         if (forceFullMesh) {
             std::cout << "    Full-mesh mode: ACTIVE (ignoring ROI settings from config)\n" << std::flush;
-        } else {
-            std::cout << "    ROI config: bbox=" << (effectiveROI.bbox.active ? "ON" : "OFF")
-                      << ", zPlane=" << (effectiveROI.zPlane.active ? "ON" : "OFF")
-                      << ", brushZones=" << effectiveROI.brushZones.size()
-                      << ", toothMask=" << (hasToothMask ? "YES" : "NO") << "\n" << std::flush;
-        }
-
-        if (useMaskedICP) {
-            std::cout << "    Running MASKED ICP refinement against reference";
-            if (effectiveROI.bbox.active) std::cout << " [bbox]";
-            if (effectiveROI.zPlane.active) std::cout << " [plane]";
-            if (!effectiveROI.brushZones.empty()) std::cout << " [brush]";
-            if (hasToothMask) std::cout << " [teeth]";
-            std::cout << "..." << std::flush;
+        } else if (useMaskedICP) {
+            std::cout << "    Running MASKED ICP refinement against reference..." << std::flush;
         } else {
             std::cout << "    Running FULL-MESH ICP refinement against reference..." << std::flush;
         }
@@ -187,9 +193,8 @@ GroupResult GroupProcessor::process(
         ICPRegistration::Params icpParams;
         icpParams.maxIterations = alignment.maxIcpIterations;
         icpParams.convergenceRms = alignment.convergenceThreshold;
-        // For pre-aligned scans, use tighter correspondence distance (already close)
         if (scansPreAligned || !precomputedTransforms.empty()) {
-            icpParams.maxCorrespDist = 5.0;  // mm - scans are already roughly aligned
+            icpParams.maxCorrespDist = 5.0;
         }
         icpParams.trimFraction = alignment.icpTrimFraction;
 
@@ -199,15 +204,9 @@ GroupResult GroupProcessor::process(
             std::cout << "." << std::flush;
 
             ICPRegistration::Result icpResult;
-            if (useMaskedICP) {
-                // Compute combined ROI mask for this scan
-                const std::vector<bool>& toothMask = (i < toothMasks.size()) ? toothMasks[i] : std::vector<bool>();
-                std::vector<bool> combinedMask = computeCombinedICPMask(*scan, effectiveROI, toothMask);
-
-                // Use masked ICP with combined ROI mask
-                icpResult = ICPRegistration::alignMasked(*scan, refData, combinedMask, icpParams);
+            if (useMaskedICP && i < icpMasks.size() && !icpMasks[i].empty()) {
+                icpResult = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
             } else {
-                // Fall back to full-mesh ICP
                 icpResult = ICPRegistration::align(*scan, refData, icpParams);
             }
 
@@ -239,10 +238,16 @@ GroupResult GroupProcessor::process(
             icpParams.convergenceRms = alignment.convergenceThreshold;
             icpParams.trimFraction = alignment.icpTrimFraction;
 
-            for (auto& scan : scans) {
+            for (std::size_t i = 0; i < scans.size(); ++i) {
+                auto& scan = scans[i];
                 if (wasCancelled()) return result;
 
-                auto r = ICPRegistration::align(*scan, refData, icpParams);
+                ICPRegistration::Result r;
+                if (!icpMasks.empty() && i < icpMasks.size() && !icpMasks[i].empty()) {
+                    r = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
+                } else {
+                    r = ICPRegistration::align(*scan, refData, icpParams);
+                }
                 if (r.converged)
                     ICPRegistration::applyTransform(*scan, r.transform);
                 scan->registered = true;
@@ -258,8 +263,8 @@ GroupResult GroupProcessor::process(
             GPAReference::updateMeanMesh(gpaMeanData, scans);
             referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
         } else {
-            // Run GPA alignment
-            if (!runGPAAlignment(scans, alignment, referenceMesh, result, scansNormalized)) {
+            // Run GPA alignment (passes icpMasks so GPA iterations also use masked ICP)
+            if (!runGPAAlignment(scans, alignment, referenceMesh, result, scansNormalized, icpMasks)) {
                 return result;
             }
         }
@@ -275,13 +280,9 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Use ROI from template if provided, otherwise from group config
-    // When forceFullMesh is true, use an inactive ROI to ensure full-mesh metrics
-    ROIConfig metricsROI;
-    if (!forceFullMesh) {
-        metricsROI = roiTemplate.has_value() ? roiTemplate->roi : group.roi;
-    }
-    // If forceFullMesh, metricsROI keeps default values (all inactive)
+    // Metrics use the same effectiveROI as ICP masking.
+    // When forceFullMesh is true, effectiveROI is group.roi (all inactive by default).
+    const ROIConfig& metricsROI = forceFullMesh ? group.roi : effectiveROI;
 
     // Stage 6: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
@@ -402,7 +403,8 @@ bool GroupProcessor::runGPAAlignment(
     const AlignmentConfig& alignment,
     std::shared_ptr<SurfaceMesh>& gpaMean,
     GroupResult& result,
-    bool scansNormalized)
+    bool scansNormalized,
+    const std::vector<std::vector<bool>>& icpMasks)
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Running GPA alignment");
     if (scansNormalized)
@@ -410,9 +412,11 @@ bool GroupProcessor::runGPAAlignment(
     else
         std::cout << "    Running GPA alignment:\n" << std::flush;
 
+    if (!icpMasks.empty())
+        std::cout << "    GPA will use masked ICP (" << icpMasks.size() << " masks)\n" << std::flush;
+
     if (scans.size() < 2) {
         result.warnings.append("Need at least 2 scans for GPA alignment");
-        // Still create a reference from the single scan
         if (!scans.empty()) {
             gpaMean = std::make_shared<SurfaceMesh>(scans[0]->mesh);
             scans[0]->registered = true;
@@ -427,6 +431,7 @@ bool GroupProcessor::runGPAAlignment(
     params.icpParams.maxIterations = alignment.maxIcpIterations;
     params.skipPcaCoarseAlign = scansNormalized;
     params.icpParams.trimFraction = alignment.icpTrimFraction;
+    params.scanMasks = icpMasks;
 
     // Run GPA
     auto gpaRef = GPAReference::compute(scans, params);

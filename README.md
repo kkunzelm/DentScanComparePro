@@ -67,7 +67,7 @@ serve different use cases:
 
 ### Integration
 - Load pre-computed transforms from DentScanAlign
-- Apply tooth segmentation masks from ROI templates
+- ROI templates: any active component (bounding box, plane slab, brush zones, tooth seeds) restricts **both** ICP alignment and metric computation to that region — no separate configuration needed
 - External reference support (CAD or lab scanner STL)
 
 ---

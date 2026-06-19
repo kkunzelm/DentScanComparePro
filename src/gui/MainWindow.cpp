@@ -1491,12 +1491,23 @@ void MainWindow::runBatch()
             if (!useMaskedICP) {
                 roiTemplate.reset();
                 m_batchLog->append("Full-mesh mode: ENABLED (ROI template ignored, forceFullMesh=true)");
-            } else if (!roiTemplate->toothSeeds.empty()) {
-                roiTemplate->useToothMask = true;
-                m_batchLog->append(QString("Masked ICP: ENABLED (%1 tooth seeds)")
-                    .arg(roiTemplate->toothSeeds.size()));
             } else {
-                m_batchLog->append("Masked ICP: No tooth seeds in template, using full-mesh ICP");
+                if (!roiTemplate->toothSeeds.empty())
+                    roiTemplate->useToothMask = true;
+
+                // Report which ROI components are active
+                QStringList active;
+                if (roiTemplate->roi.bbox.active)           active << "bbox";
+                if (roiTemplate->roi.zPlane.active)         active << "z-plane";
+                if (!roiTemplate->roi.brushZones.empty())   active << QString("%1 brush zones").arg(roiTemplate->roi.brushZones.size());
+                if (!roiTemplate->toothSeeds.empty())       active << QString("%1 tooth seeds").arg(roiTemplate->toothSeeds.size());
+
+                if (active.isEmpty()) {
+                    m_batchLog->append("ROI template: no active components — full-mesh ICP and full-mesh metrics");
+                } else {
+                    m_batchLog->append(QString("ROI template active: %1 — masked ICP + restricted metrics")
+                        .arg(active.join(", ")));
+                }
             }
         } catch (const std::exception& e) {
             QMessageBox::warning(this, "ROI Template Error",
