@@ -49,7 +49,7 @@ GroupDiscovery FileDiscovery::discoverGroup(
 {
     GroupDiscovery discovery;
     discovery.groupId = group.id;
-    discovery.skd_mm = group.skd_mm;
+    discovery.conditionValue = group.conditionValue;
 
     // Expand all patterns and collect matching files
     QStringList allFiles;

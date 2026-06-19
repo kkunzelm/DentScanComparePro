@@ -20,7 +20,7 @@ namespace DentScanBatch {
 
 /**
  * Main batch processing runner.
- * Orchestrates processing of all SKD groups and writes output files.
+ * Orchestrates processing of all condition groups and writes output files.
  * Supports incremental saving and resume capability.
  */
 class BatchRunner : public QObject {

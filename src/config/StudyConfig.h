@@ -20,12 +20,12 @@ struct ScannerDef {
 };
 
 /**
- * Configuration for a single SKD (inter-incisor distance) group.
- * Each group contains scans from multiple scanners at the same SKD level.
+ * Configuration for a single condition group.
+ * Each group contains scans from multiple scanners under the same experimental condition.
  */
 struct GroupConfig {
-    QString id;                    // e.g., "SKD_20"
-    int skd_mm = 0;               // SKD value in mm
+    QString id;                    // User-defined label, e.g., "SKD_20" or "condition_A"
+    int conditionValue = 0;        // Optional numeric parameter (study-specific meaning, e.g. mm)
     QStringList filePatterns;      // Glob patterns to find STL files
     ROIConfig roi;                 // ROI configuration for this group
     QString representativeScan;    // Path to representative scan for template editor
@@ -73,7 +73,7 @@ struct MetricsConfig {
 struct OutputConfig {
     QString baseDir = "./results";
     QString metricsCSV = "long_format_metrics.csv";
-    QString summaryCSV = "summary_by_scanner_skd.csv";
+    QString summaryCSV = "summary_by_scanner_group.csv";
     QString precisionCSV = "precision_matrix.csv";
 };
 
@@ -95,7 +95,7 @@ public:
     // Scanner definitions
     std::vector<ScannerDef> scanners;
 
-    // SKD groups
+    // Study groups (one per experimental condition)
     std::vector<GroupConfig> groups;
 
     // Processing parameters

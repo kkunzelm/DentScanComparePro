@@ -453,7 +453,7 @@ bool QCExporter::exportTransform(const std::shared_ptr<ScanData>& scan,
     // Identification
     root["scanner"] = QString::fromStdString(metrics.scannerName);
     root["group"] = metrics.groupId;
-    root["skd_mm"] = metrics.skd_mm;
+    root["condition_value"] = metrics.conditionValue;
     root["repetition"] = metrics.repetitionId;
     root["file_path"] = metrics.filePath;
 

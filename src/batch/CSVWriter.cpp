@@ -230,7 +230,7 @@ bool CSVWriter::writeSummaryCSV(
     writeBOM(file);
     QTextStream out(&file);
 
-    // Group reports by Scanner×SKD
+    // Group reports by Scanner×Group
     struct Summary {
         QString scanner;
         QString groupId;

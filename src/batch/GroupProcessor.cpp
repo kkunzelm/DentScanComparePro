@@ -46,7 +46,7 @@ GroupResult GroupProcessor::process(
 {
     GroupResult result;
     result.groupId = group.id;
-    result.skd_mm = group.skd_mm;
+    result.conditionValue = group.conditionValue;
     m_cancelled = false;
     m_currentStep = 0;
 
@@ -656,7 +656,7 @@ void GroupProcessor::computeTruenessMetrics(
         BatchMetricReport report;
         report.scannerName = scan->scannerName;
         report.groupId = group.id;
-        report.skd_mm = group.skd_mm;
+        report.conditionValue = group.conditionValue;
         report.filePath = QString::fromStdString(scan->filePath);
         report.triangleCount = scan->triangleCount;
         report.verticesTotal = scan->mesh.number_of_vertices();
@@ -803,7 +803,7 @@ void GroupProcessor::computePrecisionMetrics(
         PrecisionReport report;
         report.scannerId = QString::fromStdString(scannerId);
         report.groupId = group.id;
-        report.skd_mm = group.skd_mm;
+        report.conditionValue = group.conditionValue;
 
         std::vector<double> pairwiseRMS;
         int totalPairs = static_cast<int>(scannerScans.size() * (scannerScans.size() - 1) / 2);

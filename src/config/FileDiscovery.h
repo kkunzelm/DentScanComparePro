@@ -18,7 +18,7 @@ namespace DentScanBatch {
 struct DiscoveredFile {
     QString path;           // Full path to STL file
     QString scannerId;      // Matched scanner ID (e.g., "Primescan")
-    QString groupId;        // SKD group ID (e.g., "SKD_20")
+    QString groupId;        // Group ID (user-defined label, e.g., "SKD_20" or "condition_A")
     int repetitionId = 0;   // Repetition number (1-5)
     bool valid = true;      // False if file couldn't be properly identified
 };
@@ -28,7 +28,7 @@ struct DiscoveredFile {
  */
 struct GroupDiscovery {
     QString groupId;
-    int skd_mm;
+    int conditionValue = 0;
     QMap<QString, QStringList> filesByScanner;  // scanner ID -> list of file paths
     int totalFiles = 0;
     QStringList warnings;

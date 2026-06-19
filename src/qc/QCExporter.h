@@ -17,12 +17,12 @@ namespace DentScanBatch {
  *
  * Output structure:
  *   qc/
- *   ├── reference_meshes/    - Reference meshes (one per SKD group)
- *   │   └── SKD_XX_reference.stl
+ *   ├── reference_meshes/    - Reference meshes (one per group)
+ *   │   └── GroupID_reference.stl
  *   ├── difference_images/   - Color-coded distance maps (PNG)
- *   │   └── Scanner_SKDXX_rN.png
+ *   │   └── Scanner_GroupID_rN.png
  *   └── transforms/          - Registration transforms (JSON)
- *       └── Scanner_SKDXX_rN.json
+ *       └── Scanner_GroupID_rN.json
  */
 class QCExporter {
 public:
@@ -30,7 +30,7 @@ public:
      * Export a reference mesh as STL file.
      * @param mesh The reference surface mesh (GPA mean or external reference)
      * @param outputDir Base output directory (qc/reference_meshes/ will be appended)
-     * @param groupId Group identifier (e.g., "SKD_20")
+     * @param groupId Group identifier (e.g., "SKD_20", "condition_A")
      * @return True if successful
      */
     static bool exportReferenceMesh(

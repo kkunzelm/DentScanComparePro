@@ -969,10 +969,12 @@ void MainWindow::updateStudyOverview()
     }
 
     // Groups branch
-    auto* groupsItem = new QTreeWidgetItem(m_studyTree, {"Groups (SKD Levels)", ""});
+    auto* groupsItem = new QTreeWidgetItem(m_studyTree, {"Groups", ""});
     groupsItem->setExpanded(true);
     for (const auto& group : m_studyConfig.groups) {
-        QString details = QString("SKD %1 mm").arg(group.skd_mm);
+        QString details = group.conditionValue > 0
+            ? QString("%1 mm").arg(group.conditionValue)
+            : QString();
         auto* item = new QTreeWidgetItem(groupsItem, {group.id, details});
         for (const auto& pattern : group.filePatterns) {
             new QTreeWidgetItem(item, {"Pattern", pattern});
@@ -2491,7 +2493,7 @@ void MainWindow::rebuildMetricsFromTransforms()
         // Identification
         e.metrics.scannerName = obj["scanner"].toString().toStdString();
         e.metrics.groupId     = obj["group"].toString();
-        e.metrics.skd_mm      = obj["skd_mm"].toInt();
+        e.metrics.conditionValue = obj["condition_value"].toInt(obj["skd_mm"].toInt());
         e.metrics.repetitionId= obj["repetition"].toInt();
         e.metrics.filePath    = obj["file_path"].toString();
 
@@ -2600,12 +2602,12 @@ void MainWindow::rebuildMetricsFromTransforms()
         auto roiIt = roiByGroup.find(groupId);
         if (roiIt != roiByGroup.end()) roi = roiIt->second;
 
-        // Group by scanner within this SKD group
+        // Group by scanner within this condition group
         std::map<std::string, std::vector<std::shared_ptr<ScanData>>> byScanner;
         for (const auto& as : alignedScans)
             byScanner[as.scannerId].push_back(as.data);
 
-        int skd = groupEntries.empty() ? 0 : groupEntries[0]->metrics.skd_mm;
+        int skd = groupEntries.empty() ? 0 : groupEntries[0]->metrics.conditionValue;
 
         for (const auto& [scannerId, scannerScans] : byScanner) {
             if (scannerScans.size() < 2) continue;
@@ -2655,7 +2657,7 @@ void MainWindow::rebuildMetricsFromTransforms()
             DentScanBatch::PrecisionReport rep;
             rep.scannerId    = QString::fromStdString(scannerId);
             rep.groupId      = groupId;
-            rep.skd_mm       = skd;
+            rep.conditionValue = skd;
             rep.pairwiseCount= static_cast<int>(pairwiseRMS.size());
             rep.meanRMS      = std::accumulate(pairwiseRMS.begin(),
                                                pairwiseRMS.end(), 0.0)
@@ -2675,16 +2677,16 @@ void MainWindow::rebuildMetricsFromTransforms()
     DentScanBatch::CSVWriter::writePrecisionCSV(
         allPrecision, outputDir + "/precision_matrix.csv");
     DentScanBatch::CSVWriter::writeSummaryCSV(
-        allReports, outputDir + "/summary_by_scanner_skd.csv");
+        allReports, outputDir + "/summary_by_scanner_group.csv");
 
     QString msg = QString("Rebuilt metrics from %1 scans (%2 errands excluded).\n"
-                          "Precision recomputed for %3 scanner×SKD groups.\n"
+                          "Precision recomputed for %3 scanner×group combinations.\n"
                           "Files updated:\n"
                           "  long_format_metrics.csv\n"
                           "  trueness_metrics_all.csv\n"
                           "  trueness_metrics.csv\n"
                           "  precision_matrix.csv\n"
-                          "  summary_by_scanner_skd.csv")
+                          "  summary_by_scanner_group.csv")
         .arg(entries.size())
         .arg(errandIds.size())
         .arg(allPrecision.size());

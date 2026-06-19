@@ -44,7 +44,7 @@ public:
 
     /**
      * Write precision metrics to CSV.
-     * One row per scanner×SKD combination.
+     * One row per scanner×group combination.
      * @param reports Precision reports from all groups
      * @param filePath Output file path
      * @return True if successful
@@ -64,7 +64,7 @@ public:
         const QString& filePath);
 
     /**
-     * Write summary statistics grouped by scanner and SKD.
+     * Write summary statistics grouped by scanner and condition group.
      * @param reports Trueness reports from all groups
      * @param filePath Output file path
      * @return True if successful
@@ -87,7 +87,7 @@ public:
         const QString& outputDir,
         const QString& metricsFilename = "long_format_metrics.csv",
         const QString& precisionFilename = "precision_matrix.csv",
-        const QString& summaryFilename = "summary_by_scanner_skd.csv");
+        const QString& summaryFilename = "summary_by_scanner_group.csv");
 
     /**
      * Append a single group's results to existing CSV files.
@@ -126,7 +126,7 @@ public:
     /**
      * Generate scan ID from a report (for QC matching).
      * @param report Metric report
-     * @return Scan ID in format "Scanner_SKDXX_rN"
+     * @return Scan ID in format "Scanner_GroupID_rN"
      */
     static QString makeScanId(const BatchMetricReport& report);
 

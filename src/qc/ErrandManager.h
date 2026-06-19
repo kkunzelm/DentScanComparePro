@@ -26,9 +26,9 @@ enum class QCStatus {
  * QC record for a single scan.
  */
 struct QCRecord {
-    QString scanId;           // Unique identifier (Scanner_SKDXX_rN)
+    QString scanId;           // Unique identifier (Scanner_GroupID_rN)
     QString filePath;         // Original file path
-    QString groupId;          // SKD group
+    QString groupId;          // Condition group ID
     QCStatus status = QCStatus::Pending;
     QDateTime reviewTime;     // When status was last changed
     QString reviewerNote;     // Optional note from reviewer
@@ -86,7 +86,7 @@ public:
      * Creates a new Pending record with full metadata.
      * @param scanId Unique scan identifier
      * @param filePath Original STL file path
-     * @param groupId Group identifier (e.g., "SKD_20")
+     * @param groupId Group identifier (user-defined, e.g., "SKD_20" or "condition_A")
      * @param rmsDistance RMS distance metric
      */
     void initializeRecord(const QString& scanId, const QString& filePath,

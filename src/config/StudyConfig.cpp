@@ -183,7 +183,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
         auto grp = grpVal.toObject();
         GroupConfig group;
         group.id = grp["id"].toString();
-        group.skd_mm = grp["skd_mm"].toInt();
+        group.conditionValue = grp["condition_value"].toInt(grp["skd_mm"].toInt());
 
         auto patterns = grp["file_patterns"].toArray();
         for (const auto& pat : patterns) {
@@ -231,7 +231,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     auto output = root["output"].toObject();
     config.output.baseDir = output["base_dir"].toString("./results");
     config.output.metricsCSV = output["metrics_csv"].toString("long_format_metrics.csv");
-    config.output.summaryCSV = output["summary_csv"].toString("summary_by_scanner_skd.csv");
+    config.output.summaryCSV = output["summary_csv"].toString("summary_by_scanner_group.csv");
     config.output.precisionCSV = output["precision_csv"].toString("precision_matrix.csv");
 
     config.resolveInheritance();
@@ -293,7 +293,7 @@ void StudyConfig::saveToJSON(const QString& path) const {
     for (const auto& group : groups) {
         QJsonObject grpObj;
         grpObj["id"] = group.id;
-        grpObj["skd_mm"] = group.skd_mm;
+        grpObj["condition_value"] = group.conditionValue;
 
         QJsonArray patterns;
         for (const auto& pat : group.filePatterns) {
@@ -356,7 +356,7 @@ StudyConfig StudyConfig::createDefault() {
     defaultROI.zPlane.below_mm = 12.0;
     defaultROI.outlierSigma = 3.0;
 
-    // SKD groups
+    // Example groups for the SKD dental study (user-defined labels + numeric condition values)
     std::vector<std::pair<QString, int>> skdLevels = {
         {"SKD_18", 18},
         {"SKD_20", 20},
@@ -370,7 +370,7 @@ StudyConfig StudyConfig::createDefault() {
     for (const auto& [id, skd] : skdLevels) {
         GroupConfig group;
         group.id = id;
-        group.skd_mm = skd;
+        group.conditionValue = skd;
         group.filePatterns = {
             QString("**/SKD*%1*/*.stl").arg(skd),
             QString("**/SKD %1/**/*.stl").arg(skd),
@@ -553,7 +553,9 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
         for (const auto& grpNode : root["groups"]) {
             GroupConfig group;
             group.id = QString::fromStdString(grpNode["id"].as<std::string>(""));
-            group.skd_mm = grpNode["skd_mm"].as<int>(0);
+            group.conditionValue = grpNode["condition_value"]
+                ? grpNode["condition_value"].as<int>(0)
+                : grpNode["skd_mm"].as<int>(0); // backward compat
 
             if (grpNode["file_patterns"]) {
                 for (const auto& pat : grpNode["file_patterns"]) {
@@ -583,7 +585,7 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
         auto output = root["output"];
         config.output.baseDir = QString::fromStdString(output["base_dir"].as<std::string>("./results"));
         config.output.metricsCSV = QString::fromStdString(output["metrics_csv"].as<std::string>("long_format_metrics.csv"));
-        config.output.summaryCSV = QString::fromStdString(output["summary_csv"].as<std::string>("summary_by_scanner_skd.csv"));
+        config.output.summaryCSV = QString::fromStdString(output["summary_csv"].as<std::string>("summary_by_scanner_group.csv"));
         config.output.precisionCSV = QString::fromStdString(output["precision_csv"].as<std::string>("precision_matrix.csv"));
     }
 
@@ -635,7 +637,7 @@ void StudyConfig::saveToYAML(const QString& path) const {
     for (const auto& group : groups) {
         out << YAML::BeginMap;
         out << YAML::Key << "id" << YAML::Value << group.id.toStdString();
-        out << YAML::Key << "skd_mm" << YAML::Value << group.skd_mm;
+        out << YAML::Key << "condition_value" << YAML::Value << group.conditionValue;
 
         out << YAML::Key << "file_patterns" << YAML::Value << YAML::BeginSeq;
         for (const auto& pat : group.filePatterns) {

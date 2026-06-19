@@ -29,7 +29,7 @@ namespace DentScanBatch {
  */
 struct BatchMetricReport : public MetricReport {
     QString groupId;
-    int skd_mm = 0;
+    int conditionValue = 0;
     int repetitionId = 0;
     QString filePath;
     std::size_t verticesIncluded = 0;
@@ -42,7 +42,7 @@ struct BatchMetricReport : public MetricReport {
 struct PrecisionReport {
     QString scannerId;
     QString groupId;
-    int skd_mm = 0;
+    int conditionValue = 0;
     double meanRMS = 0.0;      // Mean of pairwise RMS values
     double sdRMS = 0.0;        // SD of pairwise RMS values
     double cv = 0.0;           // Coefficient of variation (SD/mean)
@@ -50,11 +50,11 @@ struct PrecisionReport {
 };
 
 /**
- * Result of processing a single SKD group.
+ * Result of processing a single condition group.
  */
 struct GroupResult {
     QString groupId;
-    int skd_mm = 0;
+    int conditionValue = 0;
     std::vector<BatchMetricReport> truenessReports;  // One per scan
     std::vector<PrecisionReport> precisionReports;   // One per scanner
     std::shared_ptr<SurfaceMesh> gpaMean;            // GPA mean reference mesh
@@ -64,7 +64,7 @@ struct GroupResult {
 };
 
 /**
- * Processor for a single SKD group.
+ * Processor for a single condition group.
  * Handles the complete processing pipeline:
  * 1. Load STL files
  * 2. Compute curvature (for occlusal plane detection)
