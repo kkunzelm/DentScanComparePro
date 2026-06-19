@@ -16,6 +16,7 @@
 #include <cmath>
 #include <numeric>
 #include <map>
+#include <unordered_map>
 #include <iostream>
 #include <iomanip>
 
@@ -72,6 +73,16 @@ GroupResult GroupProcessor::process(
     // Computed once here so all stages share the same config.
     const ROIConfig effectiveROI = (!forceFullMesh && roiTemplate.has_value())
                                    ? roiTemplate->roi : group.roi;
+
+    // Whether to apply the geometric ROI to the REFERENCE mesh (recommended approach).
+    // Masking the reference once means the absolute-coordinate ROI only needs to
+    // match the canonical reference frame; individual source scans are aligned to
+    // the masked reference via standard unmasked ICP regardless of their starting
+    // position. Geometric-only (bbox / z-plane / brush) — tooth masks cannot be
+    // transferred to the reference without re-running segmentation on it.
+    const bool useROIRef = !forceFullMesh &&
+        (effectiveROI.bbox.active || effectiveROI.zPlane.active ||
+         !effectiveROI.brushZones.empty());
 
     // Stage 1: Load STL files
     std::vector<std::shared_ptr<ScanData>> scans;
@@ -173,22 +184,26 @@ GroupResult GroupProcessor::process(
             std::cout << "    Scans pre-aligned (skipping GPA, running ICP refinement)\n" << std::flush;
         }
 
-        // Run ICP alignment against external reference
+        // Run ICP alignment against external reference.
+        // Apply ROI to the reference once; align each source scan (full mesh) to it.
         emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement against reference");
 
-        bool useMaskedICP = !icpMasks.empty();
-
-        if (forceFullMesh) {
-            std::cout << "    Full-mesh mode: ACTIVE (ignoring ROI settings from config)\n" << std::flush;
-        } else if (useMaskedICP) {
-            std::cout << "    Running MASKED ICP refinement against reference..." << std::flush;
-        } else {
-            std::cout << "    Running FULL-MESH ICP refinement against reference..." << std::flush;
-        }
-
         ScanData refData;
-        refData.mesh = *referenceMesh;
         refData.registered = true;
+        if (useROIRef) {
+            auto masked = extractROIReference(*referenceMesh, effectiveROI);
+            if (masked->mesh.number_of_vertices() > 0) {
+                refData = *masked;
+                std::cout << "    ICP reference (ROI-masked): "
+                          << refData.mesh.number_of_vertices() << " / "
+                          << referenceMesh->number_of_vertices() << " vertices\n" << std::flush;
+            } else {
+                std::cout << "    WARNING: ROI reference empty — using full mesh\n" << std::flush;
+                refData.mesh = *referenceMesh;
+            }
+        } else {
+            refData.mesh = *referenceMesh;
+        }
 
         ICPRegistration::Params icpParams;
         icpParams.maxIterations = alignment.maxIcpIterations;
@@ -201,23 +216,14 @@ GroupResult GroupProcessor::process(
         icpParams.hierarchyLevels  = alignment.icpHierarchyLevels;
         icpParams.negCurvK         = alignment.icpHierarchyNegCurvK;
 
-        for (std::size_t i = 0; i < scans.size(); ++i) {
-            auto& scan = scans[i];
+        std::cout << "    Running ICP refinement against reference..." << std::flush;
+        for (auto& scan : scans) {
             if (wasCancelled()) return result;
             std::cout << "." << std::flush;
 
-            const bool hasMask = useMaskedICP && i < icpMasks.size() && !icpMasks[i].empty();
-            ICPRegistration::Result icpResult;
-            if (icpParams.useHierarchy) {
-                if (hasMask)
-                    icpResult = ICPRegistration::alignMaskedHierarchical(*scan, refData, icpMasks[i], icpParams);
-                else
-                    icpResult = ICPRegistration::alignHierarchical(*scan, refData, icpParams);
-            } else if (hasMask) {
-                icpResult = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
-            } else {
-                icpResult = ICPRegistration::align(*scan, refData, icpParams);
-            }
+            ICPRegistration::Result icpResult = icpParams.useHierarchy
+                ? ICPRegistration::alignHierarchical(*scan, refData, icpParams)
+                : ICPRegistration::align(*scan, refData, icpParams);
 
             if (icpResult.converged) {
                 ICPRegistration::applyTransform(*scan, icpResult.transform);
@@ -230,16 +236,31 @@ GroupResult GroupProcessor::process(
         std::cout << " done\n" << std::flush;
     } else {
         if (scansPreAligned) {
-            // Pre-aligned: run ICP refinement against scan with most triangles, then compute mean mesh
+            // Pre-aligned: ICP refinement against the scan with the most triangles,
+            // then compute mean mesh. Apply ROI to the initial reference scan so ICP
+            // targets the ROI region only — source scans are aligned full-mesh to it.
             emit progressUpdated(++m_currentStep, m_totalSteps, "ICP refinement (pre-aligned)");
-            std::cout << "    Pre-aligned mode: running ICP refinement..." << std::flush;
 
             auto refIt = std::max_element(scans.begin(), scans.end(),
                 [](const auto& a, const auto& b){ return a->triangleCount < b->triangleCount; });
 
-            ScanData refData;
-            refData.mesh = (*refIt)->mesh;
-            refData.registered = true;
+            ScanData initRefData;
+            initRefData.registered = true;
+            if (useROIRef) {
+                auto masked = extractROIReference((*refIt)->mesh, effectiveROI);
+                if (masked->mesh.number_of_vertices() > 0) {
+                    initRefData = *masked;
+                    std::cout << "    Pre-aligned mode: ICP reference (ROI-masked): "
+                              << initRefData.mesh.number_of_vertices() << " / "
+                              << (*refIt)->mesh.number_of_vertices() << " vertices\n" << std::flush;
+                } else {
+                    std::cout << "    WARNING: ROI reference empty — using full mesh\n" << std::flush;
+                    initRefData.mesh = (*refIt)->mesh;
+                }
+            } else {
+                initRefData.mesh = (*refIt)->mesh;
+                std::cout << "    Pre-aligned mode: running ICP refinement..." << std::flush;
+            }
 
             ICPRegistration::Params icpParams;
             icpParams.maxIterations   = alignment.maxIcpIterations;
@@ -250,22 +271,13 @@ GroupResult GroupProcessor::process(
             icpParams.hierarchyLevels = alignment.icpHierarchyLevels;
             icpParams.negCurvK        = alignment.icpHierarchyNegCurvK;
 
-            for (std::size_t i = 0; i < scans.size(); ++i) {
-                auto& scan = scans[i];
+            for (auto& scan : scans) {
                 if (wasCancelled()) return result;
 
-                const bool hasMask = !icpMasks.empty() && i < icpMasks.size() && !icpMasks[i].empty();
-                ICPRegistration::Result r;
-                if (icpParams.useHierarchy) {
-                    if (hasMask)
-                        r = ICPRegistration::alignMaskedHierarchical(*scan, refData, icpMasks[i], icpParams);
-                    else
-                        r = ICPRegistration::alignHierarchical(*scan, refData, icpParams);
-                } else if (hasMask) {
-                    r = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
-                } else {
-                    r = ICPRegistration::align(*scan, refData, icpParams);
-                }
+                ICPRegistration::Result r = icpParams.useHierarchy
+                    ? ICPRegistration::alignHierarchical(*scan, initRefData, icpParams)
+                    : ICPRegistration::align(*scan, initRefData, icpParams);
+
                 if (r.converged)
                     ICPRegistration::applyTransform(*scan, r.transform);
                 scan->registered = true;
@@ -291,20 +303,40 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 5: Compute distances to reference
-    if (!computeDistances(scans, referenceMesh, result)) {
+    // Stage 5: Compute distances to ROI-masked reference.
+    // The ROI is applied to the REFERENCE once here; every source scan (full mesh)
+    // is measured against this masked reference. Source vertices far from the ROI
+    // region naturally receive large distances and are excluded from metrics by
+    // maxMetricDist below — no per-scan coordinate-dependent ROI masking needed.
+    std::shared_ptr<SurfaceMesh> distRefMesh = referenceMesh;
+    if (useROIRef) {
+        auto maskedDist = extractROIReference(*referenceMesh, effectiveROI);
+        if (maskedDist->mesh.number_of_vertices() > 0) {
+            distRefMesh = std::make_shared<SurfaceMesh>(maskedDist->mesh);
+            std::cout << "    Distance reference (ROI-masked): "
+                      << maskedDist->mesh.number_of_vertices() << " / "
+                      << referenceMesh->number_of_vertices() << " vertices\n" << std::flush;
+        } else {
+            std::cout << "    WARNING: ROI distance reference empty — using full reference\n" << std::flush;
+        }
+    }
+
+    if (!computeDistances(scans, distRefMesh, result)) {
         return result;
     }
 
     if (wasCancelled()) return result;
 
-    // Metrics use the same effectiveROI as ICP masking.
-    // When forceFullMesh is true, effectiveROI is group.roi (all inactive by default).
+    // maxMetricDist: source vertices whose distance to the masked reference exceeds
+    // this value are outside the ROI region and excluded from trueness metrics.
+    // When no geometric ROI is active, all vertices are included (max double).
+    const double maxMetricDist = useROIRef ? 5.0 : std::numeric_limits<double>::max();
+
     const ROIConfig& metricsROI = forceFullMesh ? group.roi : effectiveROI;
 
     // Stage 6: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
-    computeTruenessMetrics(scans, files, metricsROI, group, toothMasks, result);
+    computeTruenessMetrics(scans, files, metricsROI, group, toothMasks, result, maxMetricDist);
 
     if (wasCancelled()) return result;
 
@@ -600,7 +632,8 @@ void GroupProcessor::computeTruenessMetrics(
     const ROIConfig& roi,
     const GroupConfig& group,
     const std::vector<std::vector<bool>>& toothMasks,
-    GroupResult& result)
+    GroupResult& result,
+    double maxMetricDist)
 {
     std::cout << "    Computing trueness metrics..." << std::flush;
 
@@ -637,30 +670,26 @@ void GroupProcessor::computeTruenessMetrics(
         ArchMetrics::computeBoundaryMetrics(*scan, report);
         ArchMetrics::computeStitchingArtifacts(*scan, report);
 
-        // Compute occlusal Z for this scan
-        double z_occlusal = computeOcclusalZ(scan->mesh);
+        // Collect distances.
+        // The reference mesh is already ROI-masked, so distances to it are small
+        // for source vertices in the ROI region and large for those outside.
+        // Filter: |d| <= maxMetricDist  AND  tooth mask (if active).
+        // This replaces the old source-side geometric ROI mask which failed when
+        // source scans were not exactly in the template coordinate frame.
+        const std::vector<bool>* toothMask =
+            (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty())
+            ? &toothMasks[scanIdx] : nullptr;
 
-        // Apply ROI mask
-        auto mask = computeROIMask(*scan, roi, z_occlusal);
-
-        // Apply tooth mask if available
-        if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
-            const auto& toothMask = toothMasks[scanIdx];
-            for (std::size_t i = 0; i < mask.size() && i < toothMask.size(); i++) {
-                mask[i] = mask[i] && toothMask[i];
-            }
-        }
-
-        // Collect distances for vertices in ROI
         std::vector<double> distances;
         std::vector<double> absDistances;
 
         for (std::size_t i = 0; i < scan->distanceToRef.size(); i++) {
-            if (mask[i]) {
-                double d = scan->distanceToRef[i];
-                distances.push_back(d);
-                absDistances.push_back(std::abs(d));
-            }
+            double d    = scan->distanceToRef[i];
+            double absD = std::abs(d);
+            if (absD > maxMetricDist) continue;
+            if (toothMask && i < toothMask->size() && !(*toothMask)[i]) continue;
+            distances.push_back(d);
+            absDistances.push_back(absD);
         }
 
         report.verticesIncluded = distances.size();
@@ -885,6 +914,46 @@ std::vector<std::vector<bool>> GroupProcessor::computeToothMasks(
     }
 
     return masks;
+}
+
+std::shared_ptr<ScanData> GroupProcessor::extractROIReference(
+    const SurfaceMesh& refMesh,
+    const ROIConfig& roi) const
+{
+    double z_occlusal = computeOcclusalZ(refMesh);
+
+    // Mark which vertices are inside the ROI
+    std::vector<bool> inROI(refMesh.number_of_vertices(), false);
+    std::size_t idx = 0;
+    for (auto v : refMesh.vertices()) {
+        const auto& p = refMesh.point(v);
+        inROI[idx++] = roi.isInROI(p.x(), p.y(), p.z(), z_occlusal);
+    }
+
+    // Build submesh from faces where ALL 3 vertices are inside the ROI.
+    // Using all-3 keeps the submesh manifold at boundary edges.
+    auto result = std::make_shared<ScanData>();
+    std::unordered_map<std::size_t, SurfaceMesh::Vertex_index> vmap;
+    vmap.reserve(refMesh.number_of_vertices() / 4);
+
+    for (auto f : refMesh.faces()) {
+        auto hh = refMesh.halfedge(f);
+        auto v0 = refMesh.source(hh);
+        auto v1 = refMesh.target(hh);
+        auto v2 = refMesh.target(refMesh.next(hh));
+
+        if (!inROI[v0.idx()] || !inROI[v1.idx()] || !inROI[v2.idx()])
+            continue;
+
+        for (auto vx : {v0, v1, v2}) {
+            if (!vmap.count(vx.idx()))
+                vmap[vx.idx()] = result->mesh.add_vertex(refMesh.point(vx));
+        }
+        result->mesh.add_face(vmap[v0.idx()], vmap[v1.idx()], vmap[v2.idx()]);
+    }
+
+    result->registered = true;
+    return result;
 }
 
 void GroupProcessor::exportQCData(

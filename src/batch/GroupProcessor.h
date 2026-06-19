@@ -19,6 +19,7 @@
 #include <map>
 #include <optional>
 #include <atomic>
+#include <limits>
 
 namespace DentScanBatch {
 
@@ -156,12 +157,15 @@ private:
                           const std::shared_ptr<SurfaceMesh>& gpaMean,
                           GroupResult& result);
 
+    // maxMetricDist: source vertices with distance > this value to the
+    // (already ROI-masked) reference are excluded from metrics.
     void computeTruenessMetrics(const std::vector<std::shared_ptr<ScanData>>& scans,
                                 const std::vector<DiscoveredFile>& files,
                                 const ROIConfig& roi,
                                 const GroupConfig& group,
                                 const std::vector<std::vector<bool>>& toothMasks,
-                                GroupResult& result);
+                                GroupResult& result,
+                                double maxMetricDist = std::numeric_limits<double>::max());
 
     void computePrecisionMetrics(const std::vector<std::shared_ptr<ScanData>>& scans,
                                  const std::vector<DiscoveredFile>& files,
@@ -185,6 +189,14 @@ private:
 
     // Check if any ROI component is active (for deciding whether to use masked ICP)
     bool hasActiveROI(const ROIConfig& roi, bool hasToothMask) const;
+
+    // Extract a submesh of refMesh containing only faces fully inside the ROI.
+    // Used to create the masked reference for ICP and distance computation so
+    // that the ROI only needs to match the canonical reference frame, not each
+    // individual source scan.
+    std::shared_ptr<ScanData> extractROIReference(
+        const SurfaceMesh& refMesh,
+        const ROIConfig& roi) const;
 
     // Compute tooth masks for all scans using template seeds
     std::vector<std::vector<bool>> computeToothMasks(
