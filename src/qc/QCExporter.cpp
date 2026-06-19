@@ -109,6 +109,8 @@ bool QCExporter::createQCDirectories(const QString& outputDir)
     if (!dir.mkpath("qc/reference_meshes")) return false;
     if (!dir.mkpath("qc/difference_images")) return false;
     if (!dir.mkpath("qc/transforms")) return false;
+    if (!dir.mkpath("qc/aligned_meshes")) return false;
+    if (!dir.mkpath("qc/difference_meshes")) return false;
     return true;
 }
 
@@ -173,6 +175,88 @@ bool QCExporter::writeBinarySTL(const SurfaceMesh& mesh, const QString& filePath
     }
 
     return out.good();
+}
+
+bool QCExporter::writeBinaryPLY(
+    const SurfaceMesh& mesh,
+    const std::vector<double>& perVertexScalar,
+    const QString& scalarName,
+    const QString& filePath)
+{
+    std::ofstream out(filePath.toStdString(), std::ios::binary);
+    if (!out) return false;
+
+    const std::size_t nv = mesh.num_vertices();
+    const std::size_t nf = mesh.num_faces();
+
+    // PLY header (ASCII)
+    out << "ply\n"
+        << "format binary_little_endian 1.0\n"
+        << "element vertex " << nv << "\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "property float " << scalarName.toStdString() << "\n"
+        << "element face " << nf << "\n"
+        << "property list uchar int vertex_indices\n"
+        << "end_header\n";
+
+    // Vertex data
+    const bool hasScalar = (perVertexScalar.size() == nv);
+    for (auto v : mesh.vertices()) {
+        const Point3& p = mesh.point(v);
+        float fx = static_cast<float>(p.x());
+        float fy = static_cast<float>(p.y());
+        float fz = static_cast<float>(p.z());
+        float fd = hasScalar ? static_cast<float>(perVertexScalar[v.idx()]) : 0.0f;
+        out.write(reinterpret_cast<const char*>(&fx), 4);
+        out.write(reinterpret_cast<const char*>(&fy), 4);
+        out.write(reinterpret_cast<const char*>(&fz), 4);
+        out.write(reinterpret_cast<const char*>(&fd), 4);
+    }
+
+    // Face data
+    for (auto f : mesh.faces()) {
+        unsigned char count = 3;
+        out.write(reinterpret_cast<const char*>(&count), 1);
+        auto h = mesh.halfedge(f);
+        for (auto vd : mesh.vertices_around_face(h)) {
+            int idx = static_cast<int>(vd.idx());
+            out.write(reinterpret_cast<const char*>(&idx), 4);
+        }
+    }
+
+    return out.good();
+}
+
+bool QCExporter::exportAlignedMesh(
+    const std::shared_ptr<ScanData>& scan,
+    const QString& outputDir,
+    const QString& filename)
+{
+    if (!scan || scan->mesh.is_empty()) return false;
+
+    QDir dir(outputDir);
+    if (!dir.exists("qc/aligned_meshes"))
+        dir.mkpath("qc/aligned_meshes");
+
+    QString fullPath = outputDir + "/qc/aligned_meshes/" + filename + ".stl";
+    return writeBinarySTL(scan->mesh, fullPath);
+}
+
+bool QCExporter::exportDifferencePLY(
+    const std::shared_ptr<ScanData>& scan,
+    const QString& outputDir,
+    const QString& filename)
+{
+    if (!scan || !scan->distanceComputed || scan->mesh.is_empty()) return false;
+
+    QDir dir(outputDir);
+    if (!dir.exists("qc/difference_meshes"))
+        dir.mkpath("qc/difference_meshes");
+
+    QString fullPath = outputDir + "/qc/difference_meshes/" + filename + ".ply";
+    return writeBinaryPLY(scan->mesh, scan->distanceToRef, "distance", fullPath);
 }
 
 bool QCExporter::exportReferenceMesh(const std::shared_ptr<SurfaceMesh>& mesh,
@@ -540,6 +624,16 @@ QStringList QCExporter::exportGroupQC(const GroupResult& result,
             file.scannerId,
             result.groupId,
             file.repetitionId);
+
+        // Aligned mesh STL (geometry after ICP, always exported)
+        if (!exportAlignedMesh(scan, outputDir, baseName)) {
+            errors << QString("Failed to export aligned mesh: %1").arg(baseName);
+        }
+
+        // Difference PLY with per-vertex signed distance scalar
+        if (!exportDifferencePLY(scan, outputDir, baseName)) {
+            errors << QString("Failed to export difference PLY: %1").arg(baseName);
+        }
 
         // Difference image (only if enabled - disabled in batch mode)
         if (s_imageExportEnabled) {

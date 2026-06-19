@@ -163,10 +163,36 @@ public:
         const std::vector<std::vector<bool>>& toothMasks,
         const QString& outputDir);
 
+    /**
+     * Export aligned scan mesh as STL (geometry after ICP, before metric computation).
+     * Saved to qc/aligned_meshes/<filename>.stl
+     */
+    static bool exportAlignedMesh(
+        const std::shared_ptr<ScanData>& scan,
+        const QString& outputDir,
+        const QString& filename);
+
+    /**
+     * Export scan mesh as PLY with per-vertex signed distance scalar.
+     * Opens in MeshLab (Render → Color → Per-Vertex) or ParaView.
+     * Saved to qc/difference_meshes/<filename>.ply
+     */
+    static bool exportDifferencePLY(
+        const std::shared_ptr<ScanData>& scan,
+        const QString& outputDir,
+        const QString& filename);
+
 private:
     // Write CGAL Surface_mesh as binary STL
     static bool writeBinarySTL(
         const SurfaceMesh& mesh,
+        const QString& filePath);
+
+    // Write CGAL Surface_mesh as binary PLY with per-vertex float scalar
+    static bool writeBinaryPLY(
+        const SurfaceMesh& mesh,
+        const std::vector<double>& perVertexScalar,
+        const QString& scalarName,
         const QString& filePath);
 
     static bool s_imageExportEnabled;
