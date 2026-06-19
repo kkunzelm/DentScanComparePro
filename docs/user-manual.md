@@ -69,9 +69,9 @@ Create a JSON file describing your study. For a full field-by-field reference se
     {"id": "iTeroLumina", "patterns": ["*iTero*", "*Lumina*"]}
   ],
   "groups": [
-    {"id": "SKD_20", "skd_mm": 20, "file_patterns": ["**/SKD_20/*.stl"]},
-    {"id": "SKD_22", "skd_mm": 22, "file_patterns": ["**/SKD_22/*.stl"]},
-    {"id": "SKD_24", "skd_mm": 24, "file_patterns": ["**/SKD_24/*.stl"]}
+    {"id": "SKD_20", "condition_value": 20, "file_patterns": ["**/SKD_20/*.stl"]},
+    {"id": "SKD_22", "condition_value": 22, "file_patterns": ["**/SKD_22/*.stl"]},
+    {"id": "SKD_24", "condition_value": 24, "file_patterns": ["**/SKD_24/*.stl"]}
   ],
   "output": {
     "base_dir": "./results",
@@ -82,9 +82,7 @@ Create a JSON file describing your study. For a full field-by-field reference se
 }
 ```
 
-The `group.id` field is a free-form string label: use SKD values for phantom studies or
-patient IDs for clinical cohort studies. The software works with two factors as well as
-three — see the Study Config Reference for details.
+The `group.id` field is a free-form string label: use SKD values for phantom studies or patient IDs for clinical cohort studies. The optional `condition_value` integer stores a numeric parameter (e.g. depth in mm for phantom studies) and appears in QC JSON files; omit it or set to `0` for patient cohort studies where only the label matters. The software works with two factors as well as three — see the Study Config Reference for details.
 
 ### Step 3: Create an ROI Template (Optional but Recommended)
 
@@ -92,32 +90,41 @@ The ROI template defines which region of the scan to analyze. This is especially
 
 #### Understanding the ROI Selection Model
 
-The ROI (Region of Interest) is built from multiple layers that combine to determine which vertices are included in analysis:
+The ROI (Region of Interest) is split into two parts that work differently:
+
+**Geometric ROI (bounding box, plane slab, brush override zones) — applied to the REFERENCE:**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  GEOMETRIC CONSTRAINTS (combined with AND)                      │
+│  GEOMETRIC ROI COMPONENTS (combined with AND)                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ Bounding Box │  │  Plane Slab  │  │    Base      │          │
-│  │  (optional)  │──│  (optional)  │──│  Selection   │          │
+│  │ Bounding Box │  │  Plane Slab  │  │ Brush Zones  │          │
+│  │  (optional)  │──│  (optional)  │──│  (optional)  │          │
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              ▼
+                              ▼ applied ONCE to the reference mesh
 ┌─────────────────────────────────────────────────────────────────┐
-│  MANUAL OVERRIDES (applied on top)                              │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Include zones (green) → force vertices IN               │  │
-│  │  Exclude zones (red) → force vertices OUT              │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FINAL ROI → used for BOTH ICP alignment AND metric computation │
-│  (any active component triggers masked ICP for all paths)       │
+│  ROI-MASKED REFERENCE (saved as <group>_roi.stl in qc/)         │
+│  A trimmed submesh containing only faces inside the ROI region. │
+│  Source scans (full mesh) align to this trimmed reference via   │
+│  standard ICP — no source-side coordinate masking needed.       │
+│  Source vertices >5 mm from the ROI are excluded from metrics.  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Tooth segmentation (Base Selection) — applied per source scan:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  TOOTH SEGMENTATION (per-scan, requires curvature)              │
+│  Geodesic expansion from seed points → tooth crown mask         │
+│  Applied as an additional filter during METRIC COMPUTATION only │
+│  (tooth masks cannot be transferred to the reference mesh)      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why the split?** The geometric ROI coordinates (bounding box corners, plane origin) are defined in the canonical reference frame. Applying them to the reference once is always correct. Applying the same absolute coordinates to each source scan used to fail whenever a scanner had a different coordinate system origin, causing the box or plane to miss most of the scan's vertices and ICP to diverge. The new approach is robust: source scans use their full geometry during alignment, and ICP naturally focuses on the reference ROI region because that is all the reference offers.
 
 **Key Concepts:**
 
@@ -380,10 +387,13 @@ See **Appendix A — Output CSV Reference** for a full description of every colu
 
 | Directory | Contents |
 |-----------|----------|
-| `qc/reference_meshes/` | Reference meshes (GPA mean or external reference, one STL per SKD group) |
-| `qc/transforms/` | Transform matrices + metrics (JSON per scan) |
+| `qc/reference_meshes/<group>_reference.stl` | Full GPA mean or external reference mesh (one per group) |
+| `qc/reference_meshes/<group>_roi.stl` | ROI-trimmed reference submesh used for ICP and distance computation (only when a geometric ROI is active). Load alongside aligned scans to verify the ROI lands on the intended region. |
+| `qc/aligned_meshes/<scan>.stl` | Each scan's geometry after ICP, in the GPA frame. Open in any STL viewer to check that scans actually land on top of each other. |
+| `qc/difference_meshes/<scan>.ply` | Same aligned geometry as binary PLY with a per-vertex `distance` float scalar (signed mm to reference). Open in MeshLab (*Render → Color → Per-Vertex Quality*) or ParaView to inspect the spatial distribution of errors. |
+| `qc/transforms/<scan>.json` | Transform matrix + metrics (JSON per scan) |
 | `qc/segmented/` | Tooth-only meshes (when Base Selection is used) |
-| `qc/difference_images/` | Color-coded distance maps (PNG) |
+| `qc/difference_images/` | Color-coded distance maps (PNG, generated in QC tab) |
 
 ### Step 6: Quality Control Review
 
@@ -609,10 +619,13 @@ It is important to understand that difference image generation is architecturall
 
 **Phase 1 — Batch processing (metric computation):**
 
-During batch processing, the application computes all alignments and metrics entirely in memory. VTK rendering is explicitly disabled in this phase because offscreen VTK rendering is not reliable in a background thread. As a result, no difference images are produced during the batch run. What is written to disk is:
+During batch processing, the application computes all alignments and metrics entirely in memory. VTK rendering is explicitly disabled in this phase because offscreen VTK rendering is not reliable in a background thread. No difference images are produced during the batch run. What is written to disk is:
 
-- The GPA mean reference mesh for each SKD group (`qc/reference_meshes/{groupId}_reference.stl`)
-- A small JSON file per scan (`qc/transforms/{scanId}.json`) containing the 4×4 alignment matrix and the final RMS value
+- The full GPA mean reference mesh per group (`qc/reference_meshes/{groupId}_reference.stl`)
+- The ROI-trimmed reference submesh per group (`qc/reference_meshes/{groupId}_roi.stl`, only when a geometric ROI is active)
+- Each aligned scan as STL (`qc/aligned_meshes/{scanId}.stl`)
+- Each aligned scan as PLY with per-vertex signed distance scalar (`qc/difference_meshes/{scanId}.ply`)
+- A JSON file per scan (`qc/transforms/{scanId}.json`) containing the 4×4 alignment matrix and the final metrics
 
 Crucially, the per-vertex distance arrays (which would be needed to color the mesh) are **not** saved to disk. They are computed and used for statistics, then discarded.
 
@@ -766,13 +779,13 @@ The batch processor executes these stages for each SKD group:
    - **GPA** (default): PCA coarse → 4-orientation test → iterative ICP → mean mesh update
    - **Pre-aligned ICP** (`--pre-aligned`, no external ref): one ICP pass per scan against scan with most triangles → mean mesh update. GPA iterations skipped.
    - **ICP against external reference** (`--external-ref`): one ICP pass per scan against provided STL
-   - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
+   - When a geometric ROI is active: the reference is first trimmed to the ROI region (`<group>_roi.stl`); source scans (full mesh) then align to this trimmed reference via standard ICP. Tooth segmentation masks additionally filter metric computation per scan.
    - **TrICP** (`icp_trim_fraction < 1.0`): each ICP iteration discards the worst-residual fraction of correspondences before the rigid solve. Keeps stable surfaces (teeth) dominant; suppresses influence of deforming soft tissue.
    - **ICP hierarchy** (`use_icp_hierarchy`): coarse-to-fine ICP at 5%/20%/100% face decimation. Each coarse level runs to convergence and seeds the next finer level — avoids local minima from large initial offsets.
-6. **Compute distances** - CGAL AABB-tree signed distances to reference
-7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
+6. **Compute distances** - CGAL AABB-tree signed distances to the ROI-masked (or full) reference
+7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness. Source vertices more than 5 mm from the masked reference are excluded when a geometric ROI is active.
 8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
-9. **Export QC data** - GPA means, transforms, segmented meshes
+9. **Export QC data** - GPA means, ROI reference, aligned STLs, difference PLYs, transforms, segmented meshes
 
 ---
 
@@ -1012,6 +1025,9 @@ These files are written to the `qc/` subdirectory of your output directory and d
 | `qc/qc_status.json` | Complete QC status for every scan: status (pending/accepted/errand), review timestamp, RMS values, whether resolved, correction method. This file is updated automatically when you accept a re-registration result or save QC status manually. |
 | `qc/errands.json` | Compact list of scans that are currently in Errand status. Updated automatically after each re-registration. Useful for a quick audit of which scans need attention. |
 | `qc/transforms/<scanId>.json` | One file per scan. Contains the 4×4 alignment transform matrix and the full set of trueness metrics (RMS, MAD, Hausdorff, Bias, Coverage, etc.). This is the source of truth for **Rebuild Metrics from Transforms**. Overwritten when a re-registration is accepted. |
-| `qc/reference_meshes/<groupId>_reference.stl` | GPA mean mesh for each SKD group. Used as the registration target in the Errand Resolution Dialog and as the reference surface for difference image generation. |
+| `qc/reference_meshes/<groupId>_reference.stl` | Full GPA mean or external reference mesh for each group. Used as the registration target in the Errand Resolution Dialog. |
+| `qc/reference_meshes/<groupId>_roi.stl` | ROI-trimmed submesh of the reference (only written when a geometric ROI is active). This is the actual ICP target and distance reference used during batch processing. Load it alongside `aligned_meshes/` STLs to verify that the ROI covers the intended region. |
+| `qc/aligned_meshes/<scanId>.stl` | Aligned scan geometry (after ICP, in GPA frame). Open in any STL viewer to check that all scans converged to the same position. |
+| `qc/difference_meshes/<scanId>.ply` | Aligned scan geometry as binary PLY with a per-vertex `distance` float property (signed mm to reference). Open in MeshLab (*Render → Color → Per-Vertex Quality*) or ParaView to inspect where the scan deviates from the reference. |
 | `qc/difference_images/<scanId>.png` | Color-coded distance map (800×800 px, occlusal view). Generated by **Generate Difference Images** and automatically overwritten after each accepted re-registration. |
 | `qc/difference_images/<scanId>.meta` | Small JSON sidecar storing the ROI template path and modification time at the time the corresponding PNG was generated. Used by the smart image cache to decide whether an image is still valid. |

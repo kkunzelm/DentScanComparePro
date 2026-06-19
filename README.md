@@ -64,6 +64,7 @@ serve different use cases:
 - **Trueness**: RMS, MAD, Hausdorff (H95, H100), bias (signed mean), coverage rate, boundary length, hole count, stitching angle
 - **Precision**: Pairwise RMS between scan repetitions per scanner per group
 - **Summary**: Aggregated trueness statistics per scanner per group
+- **Visual QC exports**: aligned scan STLs, signed-distance PLY meshes (open in MeshLab/ParaView), ROI-masked reference STL — all saved per scan in `qc/` subdirectories for independent visual verification
 
 ### Coarse-to-Fine ICP (Xi-2025)
 - Optional resolution hierarchy: source mesh decimated to 5% / 20% / 100% of faces per level
@@ -73,7 +74,7 @@ serve different use cases:
 
 ### Integration
 - Load pre-computed transforms from DentScanAlign
-- ROI templates: any active component (bounding box, plane slab, brush zones, tooth seeds) restricts **both** ICP alignment and metric computation to that region — no separate configuration needed
+- ROI templates: any active geometric component (bounding box, plane slab, brush zones) is applied to the **reference mesh once** to create a trimmed submesh; all source scans then align to that masked reference via standard ICP. This makes ROI-restricted alignment robust to inter-scanner offsets — source scans use their full geometry during alignment. Tooth segmentation seeds additionally filter metric computation per scan.
 - External reference support (CAD or lab scanner STL)
 
 ---
@@ -115,7 +116,7 @@ serve different use cases:
 
 ## Study Configuration (JSON)
 
-The `group.id` field is a free-form string label — use SKD values for phantom studies or patient IDs for clinical studies. The `skd_mm` integer field is ignored in output; `Group_ID` from `id` appears in all CSVs.
+The `group.id` field is a free-form string label — use SKD values for phantom studies or patient IDs for clinical studies. `Group_ID` from `id` appears in all CSVs. The optional `condition_value` integer stores a study-specific numeric parameter (e.g. depth in mm for phantom studies); omit it for patient cohort studies where the group label alone is sufficient.
 
 **Phantom study (SKD levels):**
 ```json
@@ -130,8 +131,8 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
     {"id": "iTeroLumina", "patterns": ["*iTero*"]}
   ],
   "groups": [
-    {"id": "SKD_20", "skd_mm": 20, "file_patterns": ["**/SKD_20/*.stl"]},
-    {"id": "SKD_22", "skd_mm": 22, "file_patterns": ["**/SKD_22/*.stl"]}
+    {"id": "SKD_20", "condition_value": 20, "file_patterns": ["**/SKD_20/*.stl"]},
+    {"id": "SKD_22", "condition_value": 22, "file_patterns": ["**/SKD_22/*.stl"]}
   ],
   "output": {
     "base_dir": "./results",
@@ -155,8 +156,8 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
     {"id": "Trios3",         "patterns": ["Trios3*"]}
   ],
   "groups": [
-    {"id": "002", "skd_mm": 0, "file_patterns": ["*_002_*_aligned.stl"]},
-    {"id": "003", "skd_mm": 0, "file_patterns": ["*_003_*_aligned.stl"]}
+    {"id": "002", "file_patterns": ["*_002_*_aligned.stl"]},
+    {"id": "003", "file_patterns": ["*_003_*_aligned.stl"]}
   ],
   "output": {
     "base_dir": "./results_P2026_Nold",

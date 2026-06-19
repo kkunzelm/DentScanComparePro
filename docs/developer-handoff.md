@@ -72,7 +72,7 @@ src/
 │   └── FileDiscovery.{h,cpp}   Glob pattern file discovery
 ├── batch/                      Batch processing
 │   ├── BatchRunner.{h,cpp}     Orchestrates all group processing
-│   ├── GroupProcessor.{h,cpp}  Processes one SKD group
+│   ├── GroupProcessor.{h,cpp}  Processes one condition group
 │   └── CSVWriter.{h,cpp}       Output CSV files
 ├── qc/                         Quality Control workflow
 │   ├── QCExporter.{h,cpp}      Export GPA means, transforms, difference images, segmented meshes
@@ -252,7 +252,7 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
   "groups": [
     {
       "id": "SKD_20",
-      "skd_mm": 20,
+      "condition_value": 20,
       "file_patterns": ["**/SKD 20/*.stl", "**/20mm/*.stl"]
     }
   ],
@@ -294,7 +294,7 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
 
 ### Incremental Save & Resume
 
-The batch processor saves results incrementally after each SKD group completes:
+The batch processor saves results incrementally after each condition group completes:
 
 - **Automatic resume**: If the batch is interrupted, simply re-run the same command. Already-completed groups are skipped automatically.
 - **Progress tracking**: A `.batch_progress.json` file in the output directory tracks completed groups and the current observation ID.
@@ -310,6 +310,7 @@ Resuming from previous run. Already completed: 3 groups.
 [3/7] Skipping SKD_22 (already completed)
 [4/7] Processing group SKD_24...
 ```
+(Group labels come from the user-defined `id` field in the study config.)
 
 ### Output Files
 
@@ -348,17 +349,23 @@ When batch processing completes, a `qc/` folder is created with:
 
 ```
 results/qc/
-├── gpa_means/                    # GPA reference meshes (one per group)
-│   ├── 002_gpa_mean.stl          # patient study
-│   ├── SKD_20_gpa_mean.stl       # phantom study
+├── reference_meshes/             # Reference meshes (one per group)
+│   ├── 002_reference.stl         # full GPA mean — patient study
+│   ├── SKD_20_reference.stl      # full GPA mean — phantom study
+│   ├── SKD_20_roi.stl            # ROI-trimmed submesh (only when geometric ROI active)
+│   └── ...
+├── aligned_meshes/               # Each scan geometry after ICP, in GPA frame
+│   ├── Primescan_002_r1.stl
+│   └── ...
+├── difference_meshes/            # Aligned geometry as PLY with per-vertex distance scalar
+│   ├── Primescan_002_r1.ply      # open in MeshLab (Render→Color→Per-Vertex Quality)
 │   └── ...
 ├── transforms/                   # Transform matrices + metrics per scan
 │   ├── Primescan_002_r1.json
-│   ├── Trios3_SKD_20_r1.json
 │   └── ...
 ├── segmented/                    # Tooth-only meshes (when tooth mask is used)
 │   └── ...
-└── difference_images/            # (Currently disabled - see Known Issues)
+└── difference_images/            # PNG images (generated in QC tab, not during batch)
     └── *.png
 ```
 
@@ -378,6 +385,7 @@ results/qc/
   },
   "scanner": "Primescan",
   "group": "002",
+  "condition_value": 0,
   "repetition": 1,
   "file_path": "/path/to/scan.stl"
 }
@@ -547,6 +555,78 @@ Original recursive glob implementation was extremely slow. Current implementatio
 ---
 
 ## Changelog
+
+### 2026-06-19 — Generic condition group naming (skd_mm → conditionValue)
+
+**Motivation:** The internal field name `skd_mm` and GUI label "Groups (SKD Levels)" were study-specific and assumed a phantom depth-of-cavity design. Patient cohort studies (`id: "002"`) had to carry `"skd_mm": 0` as dead weight.
+
+**Changes:**
+
+- `GroupConfig::skd_mm` → `conditionValue` (`StudyConfig.h`)
+- `GroupDiscovery::skd_mm` → `conditionValue` (`FileDiscovery.h`)
+- `BatchMetricReport::skd_mm` → `conditionValue` (`GroupProcessor.h`)
+- `PrecisionReport::skd_mm` → `conditionValue` (`GroupProcessor.h`)
+- `GroupResult::skd_mm` → `conditionValue` (`GroupProcessor.h`)
+- YAML/JSON serialization key: `skd_mm` → `condition_value`. Old key accepted as fallback for backward compatibility (`StudyConfig.cpp`).
+- Transform JSON: `"skd_mm"` key → `"condition_value"` (`QCExporter.cpp`).
+- Default summary CSV filename: `summary_by_scanner_skd.csv` → `summary_by_scanner_group.csv` (both headers and `StudyConfig.h` default).
+- GUI: "Groups (SKD Levels)" → "Groups"; numeric value displayed only when `conditionValue > 0`.
+- All "SKD group" comments → "condition group" across batch, config, and QC modules.
+
+---
+
+### 2026-06-19 — Visual QC exports: aligned STL, difference PLY, ROI reference STL
+
+**Motivation:** After batch processing it was impossible to inspect intermediate results visually. The only files on disk were CSVs and transform JSONs; the actual scan geometry in the aligned frame, and the per-vertex error distribution, were discarded after metric computation.
+
+**New files written by QCExporter (always when QC output is enabled):**
+
+- **`qc/aligned_meshes/<scan>.stl`** — each scan's geometry after ICP, in the GPA reference frame. Load in any STL viewer to verify that scans from different scanners landed on top of each other.
+- **`qc/difference_meshes/<scan>.ply`** — same aligned geometry as binary PLY (`format binary_little_endian 1.0`) with a per-vertex `distance` float property (signed mm to the reference). Open in MeshLab (*Render → Color → Per-Vertex Quality*) or ParaView to inspect spatial error distribution.
+- **`qc/reference_meshes/<group>_roi.stl`** — the ROI-trimmed submesh used for ICP and distance computation (only when `useROIRef` is active, i.e. a geometric ROI is configured). Written in `GroupProcessor::process()` alongside the existing `<group>_reference.stl`.
+
+**New QCExporter methods:**
+- `exportAlignedMesh(scan, outputDir, filename)` — calls `writeBinarySTL(scan->mesh, …)`.
+- `exportDifferencePLY(scan, outputDir, filename)` — calls new `writeBinaryPLY(mesh, distanceToRef, "distance", …)`.
+- `writeBinaryPLY(mesh, perVertexScalar, scalarName, filePath)` — writes standard binary PLY with vertices (x,y,z,scalar) and face connectivity (uchar count + int indices). No VTK dependency.
+- `createQCDirectories()` updated to create `qc/aligned_meshes/` and `qc/difference_meshes/`.
+
+**Files modified:** `src/qc/QCExporter.{h,cpp}`, `src/batch/GroupProcessor.cpp`.
+
+---
+
+### 2026-06-19 — Reference-side ROI masking (architectural change)
+
+**Problem:** The previous implementation applied the geometric ROI (bounding box, z-plane slab, brush override zones) to each source scan individually using absolute world coordinates. This failed whenever a source scanner had a different coordinate system origin from the one on which the template was defined: the bounding box or z-plane would miss most of the scan's vertices, the ICP mask was nearly empty, ICP diverged, and the resulting RMS was in the mm range with near-zero coverage.
+
+Root cause: ROI coordinates are defined in the canonical reference frame (the scan used in the ROI Template Editor). Transferring them to a source scan in a different coordinate frame requires that scan to already be closely aligned — but that is the job of ICP. The dependency was circular.
+
+**Fix: apply the ROI to the reference once (`extractROIReference`):**
+
+1. At the start of each group's distance-computation stage, `GroupProcessor::process()` calls `extractROIReference(referenceMesh, effectiveROI)` to build a new `ScanData` whose mesh contains only the faces whose three vertices are all inside the geometric ROI.
+2. Source scans (full mesh) are aligned to this trimmed reference via standard `align()` — no `alignMasked()`, no per-scan coordinate logic. ICP focuses on the ROI region because that is all the reference offers.
+3. Distances are computed from the full source to the trimmed reference. Source vertices with distance > 5 mm (well outside the ROI) are excluded from trueness metrics by `maxMetricDist = 5.0`. Tooth segmentation masks, when present, additionally filter the vertex set.
+4. The ROI reference is also saved as `qc/reference_meshes/<group>_roi.stl` for visual verification.
+
+**`useROIRef` flag:**
+```cpp
+const bool useROIRef = !forceFullMesh &&
+    (effectiveROI.bbox.active || effectiveROI.zPlane.active ||
+     !effectiveROI.brushZones.empty());
+```
+Tooth masks are excluded from `useROIRef` because they cannot be transferred to the reference without re-running segmentation on different vertex indices.
+
+**`extractROIReference` implementation** (`GroupProcessor.cpp`): iterates all faces of `refMesh`; includes a face only if all three vertices pass all active geometric ROI tests. Uses `std::unordered_map<std::size_t, SurfaceMesh::Vertex_index>` for O(1) vertex index remapping.
+
+**`computeTruenessMetrics` change:** The source-side geometric ROI mask and `computeROIMask()` call were removed. Replaced by the `maxMetricDist` threshold:
+```cpp
+if (std::abs(d) > maxMetricDist) continue;  // outside ROI region
+if (toothMask && !(*toothMask)[i]) continue; // outside tooth segmentation
+```
+
+**Files modified:** `src/batch/GroupProcessor.{h,cpp}`.
+
+---
 
 ### 2026-06-19 — Coarse-to-fine ICP hierarchy with curvature-weighted QEM (Xi-2025)
 
