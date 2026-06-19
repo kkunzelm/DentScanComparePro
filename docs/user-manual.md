@@ -312,6 +312,38 @@ Set `icp_trim_fraction` in your study JSON or via `--trim-fraction` on the comma
 
 In the GUI, the **"ICP trim fraction"** spinbox (0.10–1.00, step 0.05) is on the Study Configuration tab below the normalized/pre-aligned checkboxes. Its value is saved across sessions.
 
+**ICP resolution hierarchy for large initial offsets (Xi-2025):**
+
+When scans start with large offsets relative to each other — for example, different scanner coordinate frames, or a phantom scan with substantial tilt — standard ICP can converge to a local minimum because the basin of attraction is narrow at full resolution. The ICP resolution hierarchy (Xi-2025) solves this by running ICP on progressively finer versions of the mesh:
+
+1. Decimate source to 5% of faces → run ICP to convergence
+2. Apply that transform, decimate to 20% of faces → run ICP
+3. Apply that transform, run ICP on the full-resolution mesh
+
+The decimation uses curvature-weighted QEM (Garland-Heckbert quadric cost multiplied by 10 for concave regions — CEJ, developmental grooves, gingival crevice). This preserves tooth boundary triangles at coarse levels so the coarse alignment still locks onto clinically meaningful geometry.
+
+Enable via study JSON, CLI flag, or GUI checkbox:
+
+```json
+"alignment": {
+  "use_icp_hierarchy": true,
+  "icp_hierarchy_levels": [0.05, 0.20, 1.0],
+  "icp_hierarchy_neg_curv_k": 10.0
+}
+```
+
+```bash
+./DentScanComparePro --batch --study study.json ... --icp-hierarchy
+```
+
+GUI: check **"Use ICP resolution hierarchy (Xi-2025)"** on the Study Configuration tab.
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Well-pre-aligned scans (DentScanAlignPro output) | Hierarchy not needed — leave disabled |
+| Large initial offsets or failed pre-alignment | Enable hierarchy |
+| `icp_hierarchy_neg_curv_k` | Keep at `10.0` for dental scans; lower to `1.0` to disable curvature weighting |
+
 Workflow B — Using raw STL files with JSON transforms:
 
 The STL files are in their original scanner coordinate frame. The JSON transform files are loaded and applied before ICP refinement.
@@ -661,6 +693,10 @@ Options:
   --trim-fraction <f>      TrICP: keep only this fraction of correspondences per iteration
                            sorted by point-to-plane residual (1.0 = disabled; 0.5 = 50%).
                            Overrides icp_trim_fraction in study JSON.
+  --icp-hierarchy          Enable coarse-to-fine ICP hierarchy (Xi-2025): decimates source
+                           at 5%/20%/100% of faces using curvature-weighted QEM, seeds each
+                           level with the previous transform. Overrides use_icp_hierarchy in
+                           study JSON.
   --verbose                Print detailed progress information
   -h, --help               Show help message
 ```
@@ -728,6 +764,7 @@ The batch processor executes these stages for each SKD group:
    - **ICP against external reference** (`--external-ref`): one ICP pass per scan against provided STL
    - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
    - **TrICP** (`icp_trim_fraction < 1.0`): each ICP iteration discards the worst-residual fraction of correspondences before the rigid solve. Keeps stable surfaces (teeth) dominant; suppresses influence of deforming soft tissue.
+   - **ICP hierarchy** (`use_icp_hierarchy`): coarse-to-fine ICP at 5%/20%/100% face decimation. Each coarse level runs to convergence and seeds the next finer level — avoids local minima from large initial offsets.
 6. **Compute distances** - CGAL AABB-tree signed distances to reference
 7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
 8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
@@ -741,9 +778,10 @@ The batch processor executes these stages for each SKD group:
 
 1. **Use tooth segmentation** - Gingiva deforms between scans; teeth are rigid
 2. **Set TrICP trim fraction for patient scans** - Set `icp_trim_fraction: 0.5` in your study JSON when scans include extensive soft tissue (palate, buccal mucosa). Leave at `1.0` for phantom studies.
-3. **Check statistical outliers** - Yellow-bordered scans may have registration failures
-4. **Use external reference for trueness** - CAD or lab scanner provides ground truth
-5. **Review before statistics** - QC catches registration failures before they corrupt data
+3. **Enable ICP hierarchy when scans have large offsets** - If scans start far from a common frame (e.g. scanner-native coordinate systems, or large phantom tilts), enable `use_icp_hierarchy: true`. Not needed when DentScanAlignPro pre-alignment was used.
+4. **Check statistical outliers** - Yellow-bordered scans may have registration failures
+5. **Use external reference for trueness** - CAD or lab scanner provides ground truth
+6. **Review before statistics** - QC catches registration failures before they corrupt data
 
 ### Common Issues
 

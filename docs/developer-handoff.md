@@ -60,7 +60,8 @@ src/
 │   ├── MetricReport.h          Plain metric aggregate struct
 │   ├── STLReader.{h,cpp}       Binary STL → CGAL SurfaceMesh
 │   ├── CurvatureAnalysis.{h,cpp}   CGAL interpolated curvatures
-│   ├── ICPRegistration.{h,cpp}     Point-to-plane ICP (nanoflann + Eigen)
+│   ├── ICPRegistration.{h,cpp}     Point-to-plane ICP (nanoflann + Eigen); hierarchy variants
+│   ├── MeshDecimation.{h,cpp}      Curvature-weighted QEM decimation (Xi-2025)
 │   ├── GPAReference.{h,cpp}        GPA: PCA → 4-orient test → ICP → mean mesh
 │   ├── DistanceField.{h,cpp}       CGAL AABB-tree → per-vertex signed distances
 │   ├── ToothSegmentation.{h,cpp}   Dijkstra-based crown segmentation from seed points
@@ -139,6 +140,55 @@ Recommended values:
 
 Applies to all three ICP call sites in `GroupProcessor`: GPA iterations, pre-aligned mean-mesh ICP, and external-reference ICP.
 
+### 3d. ICP Resolution Hierarchy (Xi-2025)
+
+For scans with large initial offsets (e.g. different scanner coordinate frames, or large phantom deformations) standard ICP can converge to a local minimum because the basin of attraction shrinks with mesh complexity. The hierarchy runs ICP on progressively finer decimations so coarse levels escape bad local minima before the full-resolution solve.
+
+**Algorithm:**
+1. Copy `source` into `workCopy`.
+2. For each level `(fraction, maxIter)` in `[(0.05, 30), (0.20, 30), (1.0, params.maxIterations)]`:
+   - If `fraction < 1.0`: decimate `workCopy` to that fraction using `MeshDecimation::decimate()`.
+   - Run `ICPRegistration::align()` on the decimated copy (or full copy at the last level).
+   - Apply the resulting delta transform to `workCopy` (updates vertex positions; vertex indices unchanged).
+   - Accumulate the cumulative transform `cumT = deltaT × cumT`.
+3. Return `cumT` as the final transform.
+
+**Masked variant (`alignMaskedHierarchical`):** Coarse levels use the full-mesh (no mask) decimated copy because vertex masks can't transfer to decimated meshes. The final full-resolution level uses `alignMasked()` on `workCopy`, whose vertex indices are stable across all prior `applyTransform()` calls.
+
+**GPA does not use the hierarchy** — GPA scans arrive from PCA coarse alignment and are already roughly aligned; running hierarchy ICP in every GPA iteration would add ~3× overhead for negligible gain. The hierarchy applies only to GroupProcessor's final ICP refinement passes.
+
+**`MeshDecimation::decimate()` interface:**
+```cpp
+// src/core/MeshDecimation.h
+namespace MeshDecimation {
+std::shared_ptr<ScanData> decimate(const ScanData& source,
+                                    double targetFaceFraction,
+                                    double negCurvK = 10.0);
+} // namespace MeshDecimation
+```
+
+**Curvature-weighted QEM (Xi-2025 Algorithm 1):**
+`CurvWeightedQEMCost<TM,GT>` subclasses `CGAL::SMS::GarlandHeckbert_triangle_policies<TM,GT>` and overrides the 2-argument cost `operator()`:
+
+```
+cost = GH_quadric_cost(v0, v1) × k
+  where k = 10.0  if  (κ_H(v0) + κ_H(v1))/2 < 0   (concave: CEJ, grooves, gingival crevice)
+            1.0   otherwise                            (convex: cusps, ridges)
+```
+
+The 1-argument placement `operator()` delegates to the base GH optimal point unchanged. `update_after_collapse()` averages the curvature coefficients of the two collapsed endpoints for the survivor. The curvature coefficients are read from the `"v:mean_curv"` vertex property (CGAL 6.0 `std::optional` API).
+
+Effect: concave-region edges cost 10× more to collapse, so the CEJ, developmental grooves, and gingival crevice boundaries are preserved at coarse levels — 10–15% more boundary triangles vs. standard QEM at equivalent face counts.
+
+**Configuration:**
+- `ICPRegistration::Params::useHierarchy` — enable/disable
+- `ICPRegistration::Params::hierarchyLevels` — vector of face fractions (default `{0.05, 0.20, 1.0}`)
+- `ICPRegistration::Params::negCurvK` — cost multiplier for concave edges (default `10.0`)
+- Propagated via `AlignmentConfig::useIcpHierarchy` / `icpHierarchyLevels` / `icpHierarchyNegCurvK`
+- JSON fields: `study.alignment.use_icp_hierarchy`, `icp_hierarchy_levels`, `icp_hierarchy_neg_curv_k`
+- CLI flag: `--icp-hierarchy`
+- GUI: **"Use ICP resolution hierarchy (Xi-2025)"** checkbox on Study Configuration tab
+
 ### 4. DistanceField
 CGAL AABB tree on GPA mean. Per vertex: closest point + primitive, signed by dot(diff, face_normal).
 
@@ -179,7 +229,13 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
 {
   "study": {
     "name": "Scanner_Comparison_2024",
-    "description": "6 scanners × 5 SKD levels"
+    "description": "6 scanners × 5 SKD levels",
+    "alignment": {
+      "icp_trim_fraction": 1.0,
+      "use_icp_hierarchy": false,
+      "icp_hierarchy_levels": [0.05, 0.20, 1.0],
+      "icp_hierarchy_neg_curv_k": 10.0
+    }
   },
   "scanners": [
     {"id": "Primescan", "patterns": ["*Primescan*", "*PS*"]},
@@ -224,6 +280,8 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
 - `--external-ref` / `-e`: External reference STL (CAD or lab scanner)
 - `--pre-aligned`: Skip GPA; run one ICP pass per scan against the scan with most triangles, then compute mean mesh. Curvature and tessellation metrics are also skipped unless a ROI tooth mask is active.
 - `--normalized`: Scans are normalized (transform already baked into geometry); suppress JSON transform loading even if `alignments_directory` is set in the config
+- `--trim-fraction <f>`: TrICP outlier rejection: keep only this fraction of ICP correspondences per iteration, sorted by point-to-plane residual (1.0 = no trimming; 0.5 = keep best 50%). Overrides `icp_trim_fraction` in study config.
+- `--icp-hierarchy`: Enable coarse-to-fine ICP hierarchy (Xi-2025): decimates source at 5%/20%/100% of faces using curvature-weighted QEM, seeds each level with the previous transform. Overrides `use_icp_hierarchy` in study config.
 - `--verbose`: Print detailed progress information
 
 ### Incremental Save & Resume
