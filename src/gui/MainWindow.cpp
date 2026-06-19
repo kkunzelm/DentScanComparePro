@@ -1182,6 +1182,19 @@ void MainWindow::saveROITemplate()
     zPlane["below_mm"] = m_currentROI.zPlane.below_mm;
     root["z_plane"] = zPlane;
 
+    // Occlusal plane (3-point pick result) — needed to restore z-slab reference on load
+    if (m_occlusPlaneValid) {
+        QJsonObject op;
+        QJsonArray normal, origin;
+        for (int i = 0; i < 3; i++) {
+            normal.append(m_occlusPlaneNormal[i]);
+            origin.append(m_occlusPlaneOrigin[i]);
+        }
+        op["normal"] = normal;
+        op["origin"] = origin;
+        root["occlusal_plane"] = op;
+    }
+
     // Brush zones
     QJsonArray brushArray;
     for (const auto& zone : m_currentROI.brushZones) {
@@ -1256,35 +1269,48 @@ void MainWindow::loadROITemplate()
     QJsonObject root = doc.object();
 
     // Load bounding box
+    // Set spinboxes from JSON values directly — NOT via m_currentROI, because each
+    // setChecked/setValue fires onBBoxChanged which reads the spinboxes and would
+    // overwrite m_currentROI with stale values before all spinboxes are updated.
     if (root.contains("bbox")) {
         QJsonObject bbox = root["bbox"].toObject();
-        m_currentROI.bbox.active = bbox["active"].toBool();
         QJsonArray bboxMin = bbox["min"].toArray();
         QJsonArray bboxMax = bbox["max"].toArray();
-        for (int i = 0; i < 3 && i < bboxMin.size(); i++) {
-            m_currentROI.bbox.min[i] = bboxMin[i].toDouble();
-            m_currentROI.bbox.max[i] = bboxMax[i].toDouble();
-        }
-
-        m_bboxActiveChk->setChecked(m_currentROI.bbox.active);
-        m_bboxMinX->setValue(m_currentROI.bbox.min[0]);
-        m_bboxMinY->setValue(m_currentROI.bbox.min[1]);
-        m_bboxMinZ->setValue(m_currentROI.bbox.min[2]);
-        m_bboxMaxX->setValue(m_currentROI.bbox.max[0]);
-        m_bboxMaxY->setValue(m_currentROI.bbox.max[1]);
-        m_bboxMaxZ->setValue(m_currentROI.bbox.max[2]);
+        m_bboxActiveChk->setChecked(bbox["active"].toBool());
+        m_bboxMinX->setValue(bboxMin.size() > 0 ? bboxMin[0].toDouble() : 0.0);
+        m_bboxMinY->setValue(bboxMin.size() > 1 ? bboxMin[1].toDouble() : 0.0);
+        m_bboxMinZ->setValue(bboxMin.size() > 2 ? bboxMin[2].toDouble() : 0.0);
+        m_bboxMaxX->setValue(bboxMax.size() > 0 ? bboxMax[0].toDouble() : 0.0);
+        m_bboxMaxY->setValue(bboxMax.size() > 1 ? bboxMax[1].toDouble() : 0.0);
+        m_bboxMaxZ->setValue(bboxMax.size() > 2 ? bboxMax[2].toDouble() : 0.0);
     }
 
-    // Load Z-plane
+    // Load Z-plane (same pattern: set UI from JSON values directly)
     if (root.contains("z_plane")) {
         QJsonObject zPlane = root["z_plane"].toObject();
-        m_currentROI.zPlane.active = zPlane["active"].toBool();
-        m_currentROI.zPlane.above_mm = zPlane["above_mm"].toDouble();
-        m_currentROI.zPlane.below_mm = zPlane["below_mm"].toDouble();
+        m_zPlaneActiveChk->setChecked(zPlane["active"].toBool());
+        m_zAboveSpin->setValue(zPlane["above_mm"].toDouble());
+        m_zBelowSpin->setValue(zPlane["below_mm"].toDouble());
+    }
 
-        m_zPlaneActiveChk->setChecked(m_currentROI.zPlane.active);
-        m_zAboveSpin->setValue(m_currentROI.zPlane.above_mm);
-        m_zBelowSpin->setValue(m_currentROI.zPlane.below_mm);
+    // Load occlusal plane (3-point pick result)
+    m_occlusPlaneValid = false;
+    m_occlusPlanePoints.clear();
+    if (root.contains("occlusal_plane")) {
+        QJsonObject op = root["occlusal_plane"].toObject();
+        QJsonArray normal = op["normal"].toArray();
+        QJsonArray origin = op["origin"].toArray();
+        if (normal.size() >= 3 && origin.size() >= 3) {
+            m_occlusPlaneNormal = Eigen::Vector3d(
+                normal[0].toDouble(), normal[1].toDouble(), normal[2].toDouble());
+            m_occlusPlaneOrigin = Eigen::Vector3d(
+                origin[0].toDouble(), origin[1].toDouble(), origin[2].toDouble());
+            m_occlusPlaneValid = true;
+            m_occlusPlaneStatusLabel->setText(
+                QString("Plane: defined at Z=%1").arg(m_occlusPlaneOrigin.z(), 0, 'f', 1));
+        }
+    } else {
+        m_occlusPlaneStatusLabel->setText("Plane: auto (max-Z)");
     }
 
     // Load brush zones
