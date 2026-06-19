@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2024 Prof. Dr. Karl-Heinz Kunzelmann
 
 #include "ICPRegistration.h"
+#include "MeshDecimation.h"
 
 #include <CGAL/Polygon_mesh_processing/compute_normal.h>
 
@@ -420,6 +421,128 @@ Result alignMasked(
 
     result.transform = cumT;
     return result;
+}
+
+// ---- Resolution hierarchy ICP (coarse-to-fine) ----
+//
+// Unmasked variant: decimates the source mesh at each level using curvature-weighted
+// QEM (preserves tooth-boundary triangles), runs ICP at each level, accumulates the
+// rigid transform, and seeds the next (finer) level with the accumulated result.
+//
+// This avoids local ICP minima for scans with large initial offsets by starting with
+// very few triangles (fast, wide-basin convergence) and progressively refining.
+
+Result alignHierarchical(
+    const ScanData& source,
+    const ScanData& target,
+    const Params&   params,
+    std::function<void(int, double)> progressCallback)
+{
+    // Lazy include: MeshDecimation is only needed here, avoid header at namespace scope
+    // by using a forward-declared function pointer pattern via #include in .cpp.
+    // Instead, directly call MeshDecimation::decimate() declared in MeshDecimation.h.
+    // (MeshDecimation.h is included at the top of this TU via the implementation below.)
+
+    const auto& levels = params.hierarchyLevels;
+    if (levels.empty()) {
+        return align(source, target, params, progressCallback);
+    }
+
+    // Working copy — modified in-place as we accumulate alignment through levels
+    ScanData workCopy;
+    workCopy.mesh             = source.mesh;
+    workCopy.curvatureComputed = source.curvatureComputed;
+
+    Eigen::Matrix4d cumT = Eigen::Matrix4d::Identity();
+    Result finalResult;
+    finalResult.transform  = Eigen::Matrix4d::Identity();
+    finalResult.converged  = false;
+    finalResult.finalRms   = 1e9;
+    finalResult.iterations = 0;
+
+    for (std::size_t lvl = 0; lvl < levels.size(); ++lvl) {
+        double fraction = levels[lvl];
+        bool   isLast   = (lvl == levels.size() - 1);
+
+        Params levelParams           = params;
+        levelParams.useHierarchy     = false;  // prevent recursion
+        if (!isLast) levelParams.maxIterations = std::min(params.maxIterations, 30);
+
+        if (!isLast && fraction < 1.0 - 1e-8) {
+            // Decimate current working copy for this coarse level
+            auto dec = MeshDecimation::decimate(workCopy, fraction, params.negCurvK);
+            auto r   = align(*dec, target, levelParams);
+            applyTransform(workCopy, r.transform);
+            cumT = r.transform * cumT;
+            finalResult = r;
+        } else {
+            // Full-resolution final pass on the incrementally-aligned working copy
+            auto r = align(workCopy, target, levelParams, progressCallback);
+            applyTransform(workCopy, r.transform);
+            cumT = r.transform * cumT;
+            finalResult = r;
+        }
+    }
+
+    finalResult.transform = cumT;
+    return finalResult;
+}
+
+// Masked variant: coarse levels use full-mesh decimated ICP; the fine (last) level uses
+// the ROI mask so metrics-relevant surfaces drive the final refinement.
+Result alignMaskedHierarchical(
+    const ScanData& source,
+    const ScanData& target,
+    const std::vector<bool>& sourceMask,
+    const Params&   params,
+    std::function<void(int, double)> progressCallback)
+{
+    const auto& levels = params.hierarchyLevels;
+    if (levels.empty()) {
+        return alignMasked(source, target, sourceMask, params, progressCallback);
+    }
+
+    ScanData workCopy;
+    workCopy.mesh              = source.mesh;
+    workCopy.curvatureComputed = source.curvatureComputed;
+
+    Eigen::Matrix4d cumT = Eigen::Matrix4d::Identity();
+    Result finalResult;
+    finalResult.transform  = Eigen::Matrix4d::Identity();
+    finalResult.converged  = false;
+    finalResult.finalRms   = 1e9;
+    finalResult.iterations = 0;
+
+    for (std::size_t lvl = 0; lvl < levels.size(); ++lvl) {
+        double fraction = levels[lvl];
+        bool   isLast   = (lvl == levels.size() - 1);
+
+        Params levelParams        = params;
+        levelParams.useHierarchy  = false;
+        if (!isLast) levelParams.maxIterations = std::min(params.maxIterations, 30);
+
+        if (isLast) {
+            // Fine pass: use ROI mask on the working copy (vertex indices stable after applyTransform)
+            auto r = alignMasked(workCopy, target, sourceMask, levelParams, progressCallback);
+            applyTransform(workCopy, r.transform);
+            cumT = r.transform * cumT;
+            finalResult = r;
+        } else if (fraction < 1.0 - 1e-8) {
+            auto dec = MeshDecimation::decimate(workCopy, fraction, params.negCurvK);
+            auto r   = align(*dec, target, levelParams);
+            applyTransform(workCopy, r.transform);
+            cumT = r.transform * cumT;
+            finalResult = r;
+        } else {
+            auto r = align(workCopy, target, levelParams);
+            applyTransform(workCopy, r.transform);
+            cumT = r.transform * cumT;
+            finalResult = r;
+        }
+    }
+
+    finalResult.transform = cumT;
+    return finalResult;
 }
 
 } // namespace ICPRegistration

@@ -196,15 +196,24 @@ GroupResult GroupProcessor::process(
         if (scansPreAligned || !precomputedTransforms.empty()) {
             icpParams.maxCorrespDist = 5.0;
         }
-        icpParams.trimFraction = alignment.icpTrimFraction;
+        icpParams.trimFraction     = alignment.icpTrimFraction;
+        icpParams.useHierarchy     = alignment.useIcpHierarchy;
+        icpParams.hierarchyLevels  = alignment.icpHierarchyLevels;
+        icpParams.negCurvK         = alignment.icpHierarchyNegCurvK;
 
         for (std::size_t i = 0; i < scans.size(); ++i) {
             auto& scan = scans[i];
             if (wasCancelled()) return result;
             std::cout << "." << std::flush;
 
+            const bool hasMask = useMaskedICP && i < icpMasks.size() && !icpMasks[i].empty();
             ICPRegistration::Result icpResult;
-            if (useMaskedICP && i < icpMasks.size() && !icpMasks[i].empty()) {
+            if (icpParams.useHierarchy) {
+                if (hasMask)
+                    icpResult = ICPRegistration::alignMaskedHierarchical(*scan, refData, icpMasks[i], icpParams);
+                else
+                    icpResult = ICPRegistration::alignHierarchical(*scan, refData, icpParams);
+            } else if (hasMask) {
                 icpResult = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
             } else {
                 icpResult = ICPRegistration::align(*scan, refData, icpParams);
@@ -233,17 +242,26 @@ GroupResult GroupProcessor::process(
             refData.registered = true;
 
             ICPRegistration::Params icpParams;
-            icpParams.maxIterations = alignment.maxIcpIterations;
-            icpParams.maxCorrespDist = 10.0;  // larger window: cross-scanner centroid offsets can exceed 5mm
-            icpParams.convergenceRms = alignment.convergenceThreshold;
-            icpParams.trimFraction = alignment.icpTrimFraction;
+            icpParams.maxIterations   = alignment.maxIcpIterations;
+            icpParams.maxCorrespDist  = 10.0;  // larger window: cross-scanner centroid offsets can exceed 5mm
+            icpParams.convergenceRms  = alignment.convergenceThreshold;
+            icpParams.trimFraction    = alignment.icpTrimFraction;
+            icpParams.useHierarchy    = alignment.useIcpHierarchy;
+            icpParams.hierarchyLevels = alignment.icpHierarchyLevels;
+            icpParams.negCurvK        = alignment.icpHierarchyNegCurvK;
 
             for (std::size_t i = 0; i < scans.size(); ++i) {
                 auto& scan = scans[i];
                 if (wasCancelled()) return result;
 
+                const bool hasMask = !icpMasks.empty() && i < icpMasks.size() && !icpMasks[i].empty();
                 ICPRegistration::Result r;
-                if (!icpMasks.empty() && i < icpMasks.size() && !icpMasks[i].empty()) {
+                if (icpParams.useHierarchy) {
+                    if (hasMask)
+                        r = ICPRegistration::alignMaskedHierarchical(*scan, refData, icpMasks[i], icpParams);
+                    else
+                        r = ICPRegistration::alignHierarchical(*scan, refData, icpParams);
+                } else if (hasMask) {
                     r = ICPRegistration::alignMasked(*scan, refData, icpMasks[i], icpParams);
                 } else {
                     r = ICPRegistration::align(*scan, refData, icpParams);
@@ -428,9 +446,12 @@ bool GroupProcessor::runGPAAlignment(
     GPAReference::Params params;
     params.maxGPAIterations = 20;
     params.convergenceThresh = alignment.convergenceThreshold;
-    params.icpParams.maxIterations = alignment.maxIcpIterations;
-    params.skipPcaCoarseAlign = scansNormalized;
-    params.icpParams.trimFraction = alignment.icpTrimFraction;
+    params.icpParams.maxIterations  = alignment.maxIcpIterations;
+    params.skipPcaCoarseAlign       = scansNormalized;
+    params.icpParams.trimFraction   = alignment.icpTrimFraction;
+    params.icpParams.useHierarchy   = alignment.useIcpHierarchy;
+    params.icpParams.hierarchyLevels = alignment.icpHierarchyLevels;
+    params.icpParams.negCurvK       = alignment.icpHierarchyNegCurvK;
     params.scanMasks = icpMasks;
 
     // Run GPA

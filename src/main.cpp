@@ -129,6 +129,16 @@ int main(int argc, char *argv[])
     );
     parser.addOption(trimFractionOption);
 
+    // ICP resolution hierarchy (coarse-to-fine with curvature-weighted QEM)
+    QCommandLineOption icpHierarchyOption(
+        "icp-hierarchy",
+        "Enable coarse-to-fine ICP hierarchy (Xi-2025): decimates source mesh at 5%/20%/100% "
+        "of faces using curvature-weighted QEM, runs ICP at each level, seeds the next with "
+        "the accumulated transform. Preserves tooth-boundary triangles at all levels. "
+        "Overrides use_icp_hierarchy in study config."
+    );
+    parser.addOption(icpHierarchyOption);
+
     parser.process(app);
 
     // Determine mode
@@ -158,6 +168,7 @@ int main(int argc, char *argv[])
         bool preAligned = parser.isSet(preAlignedOption);
         bool normalized = parser.isSet(normalizedOption);
         bool verbose = parser.isSet(verboseOption);
+        bool icpHierarchy = parser.isSet(icpHierarchyOption);
         double trimFraction = parser.isSet(trimFractionOption)
             ? parser.value(trimFractionOption).toDouble() : -1.0;
 
@@ -182,6 +193,9 @@ int main(int argc, char *argv[])
         if (trimFraction >= 0.0) {
             std::cout << "Trim fraction: " << trimFraction << " (TrICP outlier rejection)\n";
         }
+        if (icpHierarchy) {
+            std::cout << "ICP hierarchy: YES (coarse-to-fine 5%/20%/100%, curvature-weighted QEM)\n";
+        }
         std::cout << "\n" << std::flush;
 
         try {
@@ -205,6 +219,10 @@ int main(int argc, char *argv[])
             if (trimFraction >= 0.0) {
                 config.alignment.icpTrimFraction = trimFraction;
                 std::cout << "Trim fraction: " << trimFraction << " (CLI override)\n";
+            }
+            if (icpHierarchy) {
+                config.alignment.useIcpHierarchy = true;
+                std::cout << "ICP hierarchy: enabled (CLI override)\n";
             }
             std::cout << " done.\n";
             std::cout << "Study: " << config.name.toStdString() << "\n\n" << std::flush;

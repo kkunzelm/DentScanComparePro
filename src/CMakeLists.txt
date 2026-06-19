@@ -3,6 +3,7 @@ set(CORE_SOURCES
     core/STLReader.cpp
     core/CurvatureAnalysis.cpp
     core/ICPRegistration.cpp
+    core/MeshDecimation.cpp
     core/GPAReference.cpp
     core/DistanceField.cpp
     core/ToothSegmentation.cpp

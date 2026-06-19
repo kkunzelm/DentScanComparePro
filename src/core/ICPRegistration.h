@@ -21,6 +21,15 @@ struct Params {
     // so the rigid solve focuses on stable surfaces (teeth).
     // 1.0 = no trimming (default); 0.5 = keep 50% (aggressive, high soft-tissue).
     double trimFraction    = 1.0;
+
+    // Resolution hierarchy (coarse-to-fine, Xi-2025 decimation):
+    // Each entry is a face fraction (0,1] — mesh is decimated to that fraction for
+    // that level.  Last entry should be 1.0 (full-resolution fine pass).
+    // Hierarchy is only used by alignHierarchical() / alignMaskedHierarchical().
+    bool                useHierarchy    = false;
+    std::vector<double> hierarchyLevels = {0.05, 0.20, 1.0};
+    // Xi-2025 boundary-preservation weight: cost × negCurvK for negative-curvature edges.
+    double              negCurvK        = 10.0;
 };
 
 // Result of one ICP run
@@ -51,6 +60,27 @@ std::vector<Eigen::Vector3d> sampleMesh(const ScanData& scan, int count);
 // Use this for crown-restricted refinement after an initial full-mesh GPA.
 // Falls back to full-mesh sampling if the masked region is too small.
 Result alignMasked(
+    const ScanData& source,
+    const ScanData& target,
+    const std::vector<bool>& sourceMask,
+    const Params&   params = {},
+    std::function<void(int, double)> progressCallback = nullptr
+);
+
+// Coarse-to-fine ICP using curvature-weighted QEM mesh decimation (Xi-2025).
+// Params::hierarchyLevels defines face fractions per level (ascending, last = 1.0).
+// At each level the source is decimated to that fraction and ICP runs to convergence;
+// the resulting transform seeds the next (finer) level.
+Result alignHierarchical(
+    const ScanData& source,
+    const ScanData& target,
+    const Params&   params = {},
+    std::function<void(int, double)> progressCallback = nullptr
+);
+
+// Like alignHierarchical() but at the fine level uses ROI masking.
+// Coarse levels use full-mesh decimated ICP; fine level uses alignMasked().
+Result alignMaskedHierarchical(
     const ScanData& source,
     const ScanData& target,
     const std::vector<bool>& sourceMask,

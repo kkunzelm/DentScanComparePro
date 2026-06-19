@@ -156,6 +156,13 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.alignment.usePcaCoarse = align["use_pca_coarse"].toBool(true);
     config.alignment.use4OrientationTest = align["use_4orientation_test"].toBool(true);
     config.alignment.icpTrimFraction = align["icp_trim_fraction"].toDouble(1.0);
+    config.alignment.useIcpHierarchy = align["use_icp_hierarchy"].toBool(false);
+    config.alignment.icpHierarchyNegCurvK = align["icp_hierarchy_neg_curv_k"].toDouble(10.0);
+    if (align.contains("icp_hierarchy_levels")) {
+        config.alignment.icpHierarchyLevels.clear();
+        for (const auto& v : align["icp_hierarchy_levels"].toArray())
+            config.alignment.icpHierarchyLevels.push_back(v.toDouble());
+    }
 
     // Scanners
     auto scanners = root["scanners"].toArray();
@@ -256,6 +263,13 @@ void StudyConfig::saveToJSON(const QString& path) const {
     align["use_pca_coarse"] = alignment.usePcaCoarse;
     align["use_4orientation_test"] = alignment.use4OrientationTest;
     align["icp_trim_fraction"] = alignment.icpTrimFraction;
+    if (alignment.useIcpHierarchy) {
+        align["use_icp_hierarchy"] = true;
+        align["icp_hierarchy_neg_curv_k"] = alignment.icpHierarchyNegCurvK;
+        QJsonArray levelsArr;
+        for (double l : alignment.icpHierarchyLevels) levelsArr.append(l);
+        align["icp_hierarchy_levels"] = levelsArr;
+    }
     study["alignment"] = align;
 
     root["study"] = study;
@@ -510,6 +524,13 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
             config.alignment.usePcaCoarse = align["use_pca_coarse"].as<bool>(true);
             config.alignment.use4OrientationTest = align["use_4orientation_test"].as<bool>(true);
             config.alignment.icpTrimFraction = align["icp_trim_fraction"].as<double>(1.0);
+            config.alignment.useIcpHierarchy = align["use_icp_hierarchy"].as<bool>(false);
+            config.alignment.icpHierarchyNegCurvK = align["icp_hierarchy_neg_curv_k"].as<double>(10.0);
+            if (align["icp_hierarchy_levels"]) {
+                config.alignment.icpHierarchyLevels.clear();
+                for (const auto& v : align["icp_hierarchy_levels"])
+                    config.alignment.icpHierarchyLevels.push_back(v.as<double>());
+            }
         }
     }
 
@@ -586,6 +607,11 @@ void StudyConfig::saveToYAML(const QString& path) const {
     out << YAML::Key << "use_pca_coarse" << YAML::Value << alignment.usePcaCoarse;
     out << YAML::Key << "use_4orientation_test" << YAML::Value << alignment.use4OrientationTest;
     out << YAML::Key << "icp_trim_fraction" << YAML::Value << alignment.icpTrimFraction;
+    out << YAML::Key << "use_icp_hierarchy" << YAML::Value << alignment.useIcpHierarchy;
+    out << YAML::Key << "icp_hierarchy_neg_curv_k" << YAML::Value << alignment.icpHierarchyNegCurvK;
+    out << YAML::Key << "icp_hierarchy_levels" << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double l : alignment.icpHierarchyLevels) out << l;
+    out << YAML::EndSeq;
     out << YAML::EndMap;
 
     out << YAML::EndMap;

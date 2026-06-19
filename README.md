@@ -65,6 +65,12 @@ serve different use cases:
 - **Precision**: Pairwise RMS between scan repetitions per scanner per group
 - **Summary**: Aggregated trueness statistics per scanner per group
 
+### Coarse-to-Fine ICP (Xi-2025)
+- Optional resolution hierarchy: source mesh decimated to 5% / 20% / 100% of faces per level
+- Curvature-weighted QEM decimation: edges in negative-curvature regions (CEJ, developmental grooves, gingival crevice) receive a ×10 collapse cost, preserving tooth boundary triangles at coarse levels (Xi-2025 Algorithm 1)
+- Each coarse level runs to ICP convergence and seeds the next finer level — avoids local minima from large initial offsets
+- Enabled via `--icp-hierarchy` CLI flag, GUI checkbox, or `use_icp_hierarchy` in study JSON
+
 ### Integration
 - Load pre-computed transforms from DentScanAlign
 - ROI templates: any active component (bounding box, plane slab, brush zones, tooth seeds) restricts **both** ICP alignment and metric computation to that region — no separate configuration needed
@@ -102,6 +108,7 @@ serve different use cases:
 | `--pre-aligned` | Skip GPA; run one ICP pass per scan then compute mean mesh. Also skips curvature/tessellation metrics unless a ROI tooth mask is active. Use with DentScanAlignPro normalized output. |
 | `--normalized` | Geometry already contains the baked transform; skip JSON transform loading |
 | `--trim-fraction` | TrICP outlier rejection: keep only this fraction of ICP correspondences per iteration, sorted by point-to-plane residual (1.0 = no trimming; 0.5 = keep best 50%). Overrides `icp_trim_fraction` in study config. |
+| `--icp-hierarchy` | Enable coarse-to-fine ICP hierarchy (Xi-2025): decimates source at 5%/20%/100% of faces using curvature-weighted QEM, seeds each level with the previous transform. Overrides `use_icp_hierarchy` in study config. |
 | `--verbose` | Print detailed progress information |
 
 ---

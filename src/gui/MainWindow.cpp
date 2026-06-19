@@ -77,6 +77,7 @@ void MainWindow::loadSettings()
     QSignalBlocker b6(m_scansPreAlignedChk);
     QSignalBlocker b10(m_scansNormalizedChk);
     QSignalBlocker b11(m_icpTrimFractionSpin);
+    QSignalBlocker b12(m_icpHierarchyChk);
     QSignalBlocker b7(m_roiTemplateEdit);
     QSignalBlocker b8(m_useMaskedICPChk);
     QSignalBlocker b9(m_maskedOutputDirEdit);
@@ -95,6 +96,7 @@ void MainWindow::loadSettings()
     m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
     m_scansNormalizedChk->setChecked(settings.value("options/scansNormalized", true).toBool());
     m_icpTrimFractionSpin->setValue(settings.value("options/icpTrimFraction", 1.0).toDouble());
+    m_icpHierarchyChk->setChecked(settings.value("options/icpHierarchy", false).toBool());
     m_useMaskedICPChk->setChecked(settings.value("options/useMaskedICP", true).toBool());
 
     m_templatePathEdit->setText(settings.value("paths/templateScan").toString());
@@ -112,6 +114,7 @@ void MainWindow::saveSettings()
     settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
     settings.setValue("options/scansNormalized", m_scansNormalizedChk->isChecked());
     settings.setValue("options/icpTrimFraction", m_icpTrimFractionSpin->value());
+    settings.setValue("options/icpHierarchy", m_icpHierarchyChk->isChecked());
     settings.setValue("options/useMaskedICP", m_useMaskedICPChk->isChecked());
     settings.setValue("paths/templateScan", m_templatePathEdit->text());
 }
@@ -302,6 +305,20 @@ void MainWindow::setupConfigTab()
     connect(m_icpTrimFractionSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double) { saveSettings(); });
     pathsLayout->addRow("ICP trim fraction:", m_icpTrimFractionSpin);
+
+    m_icpHierarchyChk = new QCheckBox("ICP resolution hierarchy (coarse-to-fine)");
+    m_icpHierarchyChk->setChecked(false);
+    m_icpHierarchyChk->setToolTip(
+        "Enable coarse-to-fine ICP hierarchy (Xi-2025).\n"
+        "Decimates the source mesh to 5% / 20% / 100% of its faces using\n"
+        "curvature-weighted QEM (negative-curvature edges at tooth boundaries\n"
+        "cost ×10 to collapse, preserving CEJ and developmental groove detail).\n"
+        "ICP runs at each level; each coarse result seeds the next finer pass.\n"
+        "Useful for scans with large initial misalignment or many soft-tissue artifacts.\n"
+        "Adds ~30% runtime overhead. Overrides use_icp_hierarchy in study JSON.");
+    connect(m_icpHierarchyChk, &QCheckBox::toggled,
+            this, [this](bool) { saveSettings(); });
+    pathsLayout->addRow("", m_icpHierarchyChk);
 
     // Load button
     auto* loadBtn = new QPushButton("Load Configuration");
@@ -1472,7 +1489,8 @@ void MainWindow::runBatch()
     m_studyConfig.externalReferencePath = externalRef;
     m_studyConfig.scansPreAligned = scansPreAligned;
     m_studyConfig.scansNormalized = scansNormalized;
-    m_studyConfig.alignment.icpTrimFraction = m_icpTrimFractionSpin->value();
+    m_studyConfig.alignment.icpTrimFraction  = m_icpTrimFractionSpin->value();
+    m_studyConfig.alignment.useIcpHierarchy  = m_icpHierarchyChk->isChecked();
     if (!externalRef.isEmpty()) {
         m_studyConfig.referenceStrategy = "external";
     }

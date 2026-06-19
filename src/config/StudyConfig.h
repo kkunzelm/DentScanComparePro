@@ -44,6 +44,16 @@ struct AlignmentConfig {
     // smallest point-to-plane residuals (1.0 = no trimming; 0.5 = keep 50%).
     // Lower values reject more soft-tissue deformation but need stable overlap.
     double icpTrimFraction = 1.0;
+
+    // Resolution hierarchy ICP (coarse-to-fine):
+    // Each level specifies the fraction of source faces to keep (0,1].
+    // The last level must be 1.0 (full-resolution final pass).
+    // Enabled by --icp-hierarchy CLI flag or the GUI checkbox.
+    bool useIcpHierarchy = false;
+    std::vector<double> icpHierarchyLevels = {0.05, 0.20, 1.0};
+    // Xi-2025 boundary-preservation weight for curvature-weighted QEM:
+    // edges with negative mean curvature get cost × negCurvK (default 10).
+    double icpHierarchyNegCurvK = 10.0;
 };
 
 /**
