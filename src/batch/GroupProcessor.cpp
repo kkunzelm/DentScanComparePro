@@ -406,9 +406,9 @@ bool GroupProcessor::runGPAAlignment(
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Running GPA alignment");
     if (scansNormalized)
-        std::cout << "    Running GPA alignment (PCA skipped — scans normalized)..." << std::flush;
+        std::cout << "    Running GPA alignment (PCA skipped — scans normalized):\n" << std::flush;
     else
-        std::cout << "    Running GPA alignment..." << std::flush;
+        std::cout << "    Running GPA alignment:\n" << std::flush;
 
     if (scans.size() < 2) {
         result.warnings.append("Need at least 2 scans for GPA alignment");
@@ -444,7 +444,6 @@ bool GroupProcessor::runGPAAlignment(
         scan->registered = true;
     }
 
-    std::cout << " done\n" << std::flush;
     return true;
 }
 

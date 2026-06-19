@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <numbers>
@@ -160,14 +162,20 @@ void updateToMeanMesh(ScanData& gpaRef,
 
     std::vector<std::unique_ptr<AABBTree>> trees;
     trees.reserve(scans.size());
+    std::cout << "    Mean mesh: building " << scans.size() << " AABB trees" << std::flush;
     for (const auto& s : scans) {
         auto t = std::make_unique<AABBTree>(
             faces(s->mesh).first, faces(s->mesh).second, s->mesh);
         t->accelerate_distance_queries();
         trees.push_back(std::move(t));
+        std::cout << "." << std::flush;
     }
+    std::cout << " done\n" << std::flush;
 
+    const std::size_t nVerts = gpaRef.mesh.num_vertices();
     const double invN = 1.0 / static_cast<double>(trees.size());
+    std::size_t vIdx = 0;
+    std::cout << "    Mean mesh: updating " << nVerts << " vertices (0%)" << std::flush;
     for (auto v : gpaRef.mesh.vertices()) {
         const Point3& p = gpaRef.mesh.point(v);
         double sx = 0.0, sy = 0.0, sz = 0.0;
@@ -178,7 +186,13 @@ void updateToMeanMesh(ScanData& gpaRef,
             sz += CGAL::to_double(cp.z());
         }
         gpaRef.mesh.point(v) = Point3(sx * invN, sy * invN, sz * invN);
+        if (++vIdx % 10000 == 0 || vIdx == nVerts) {
+            int pct = static_cast<int>(100 * vIdx / nVerts);
+            std::cout << "\r    Mean mesh: updating " << nVerts
+                      << " vertices (" << pct << "%)   " << std::flush;
+        }
     }
+    std::cout << " done\n" << std::flush;
 }
 
 } // namespace
@@ -244,6 +258,8 @@ std::shared_ptr<ScanData> compute(
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
         double maxDisp = 0.0;
+        std::cout << "    GPA cycle " << (cycle + 1) << "/" << params.maxGPAIterations
+                  << " (" << scans.size() << " scans):\n" << std::flush;
 
         for (std::size_t si = 0; si < scans.size(); ++si) {
             auto& scan = scans[si];
@@ -262,7 +278,19 @@ std::shared_ptr<ScanData> compute(
                 });
             ICPRegistration::applyTransform(*scan, r1.transform);
             maxDisp = std::max(maxDisp, r1.finalRms);
+
+            std::cout << "      [" << std::setw(2) << (si + 1) << "/" << scans.size() << "]"
+                      << " " << std::left << std::setw(16) << scan->scannerName << std::right
+                      << "  rms=" << std::fixed << std::setprecision(4) << r1.finalRms << " mm"
+                      << "  iter=" << std::setw(3) << r1.iterations
+                      << (r1.converged ? "" : "  [NOT CONVERGED]")
+                      << "\n" << std::flush;
         }
+
+        std::cout << "    cycle " << (cycle + 1) << " done"
+                  << "  maxRMS=" << std::fixed << std::setprecision(4) << maxDisp << " mm"
+                  << (maxDisp < params.convergenceThresh ? "  [converged]\n" : "\n")
+                  << std::flush;
 
         if (maxDisp < params.convergenceThresh) break;
     }
