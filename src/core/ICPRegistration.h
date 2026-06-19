@@ -15,6 +15,12 @@ struct Params {
     double convergenceRms  = 1e-4;   // [mm] stop when ΔRMS < this
     int    sampleCount     = 20000;  // points to sample from each mesh
     double maxCorrespDist  = 5.0;    // [mm] reject correspondences further than this
+    // TrICP: after distance rejection, keep only this fraction of correspondences
+    // sorted by point-to-plane residual (smallest first).  Discards the worst
+    // correspondences — typically deforming soft tissue (gingiva, palate) —
+    // so the rigid solve focuses on stable surfaces (teeth).
+    // 1.0 = no trimming (default); 0.5 = keep 50% (aggressive, high soft-tissue).
+    double trimFraction    = 1.0;
 };
 
 // Result of one ICP run

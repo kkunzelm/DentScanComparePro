@@ -155,6 +155,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.alignment.convergenceThreshold = align["convergence_threshold_mm"].toDouble(0.01);
     config.alignment.usePcaCoarse = align["use_pca_coarse"].toBool(true);
     config.alignment.use4OrientationTest = align["use_4orientation_test"].toBool(true);
+    config.alignment.icpTrimFraction = align["icp_trim_fraction"].toDouble(1.0);
 
     // Scanners
     auto scanners = root["scanners"].toArray();
@@ -254,6 +255,7 @@ void StudyConfig::saveToJSON(const QString& path) const {
     align["convergence_threshold_mm"] = alignment.convergenceThreshold;
     align["use_pca_coarse"] = alignment.usePcaCoarse;
     align["use_4orientation_test"] = alignment.use4OrientationTest;
+    align["icp_trim_fraction"] = alignment.icpTrimFraction;
     study["alignment"] = align;
 
     root["study"] = study;
@@ -507,6 +509,7 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
             config.alignment.convergenceThreshold = align["convergence_threshold_mm"].as<double>(0.01);
             config.alignment.usePcaCoarse = align["use_pca_coarse"].as<bool>(true);
             config.alignment.use4OrientationTest = align["use_4orientation_test"].as<bool>(true);
+            config.alignment.icpTrimFraction = align["icp_trim_fraction"].as<double>(1.0);
         }
     }
 
@@ -582,6 +585,7 @@ void StudyConfig::saveToYAML(const QString& path) const {
     out << YAML::Key << "convergence_threshold_mm" << YAML::Value << alignment.convergenceThreshold;
     out << YAML::Key << "use_pca_coarse" << YAML::Value << alignment.usePcaCoarse;
     out << YAML::Key << "use_4orientation_test" << YAML::Value << alignment.use4OrientationTest;
+    out << YAML::Key << "icp_trim_fraction" << YAML::Value << alignment.icpTrimFraction;
     out << YAML::EndMap;
 
     out << YAML::EndMap;

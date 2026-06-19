@@ -58,7 +58,10 @@ Create a JSON file describing your study. For a full field-by-field reference se
     "name": "Scanner_Comparison_2024",
     "version": 1,
     "reference_strategy": "gpa_mean",
-    "scans_normalized": true
+    "scans_normalized": true,
+    "alignment": {
+      "icp_trim_fraction": 1.0
+    }
   },
   "scanners": [
     {"id": "Primescan",   "patterns": ["*Primescan*"]},
@@ -283,7 +286,21 @@ This is the most common case. The STL files are already positioned correctly; th
 
 GUI: enable **"Scans are normalized (skip JSON transforms, already applied)"** (checked by default).
 
-**Workflow B — Using raw STL files with JSON transforms:**
+**TrICP for scans with soft-tissue coverage:**
+
+Patient intraoral scans often cover gingiva, buccal mucosa, and soft palate in addition to the teeth. These soft-tissue surfaces deform between scan repetitions, so their ICP correspondences have large residuals that pull the rigid transform away from the correct tooth alignment. Trimmed ICP (TrICP) addresses this by discarding the worst-residual correspondences each iteration.
+
+Set `icp_trim_fraction` in your study JSON or via `--trim-fraction` on the command line:
+
+| Value | Effect | Recommended when |
+|-------|--------|-----------------|
+| `1.0` | No trimming (default) | Phantom studies with low soft-tissue coverage |
+| `0.7` | Discard worst 30% | Scans with moderate gingival coverage |
+| `0.5` | Discard worst 50% | Patient scans with extensive soft tissue (palate, buccal mucosa) |
+
+In the GUI, the **"ICP trim fraction"** spinbox (0.10–1.00, step 0.05) is on the Study Configuration tab below the normalized/pre-aligned checkboxes. Its value is saved across sessions.
+
+Workflow B — Using raw STL files with JSON transforms:
 
 The STL files are in their original scanner coordinate frame. The JSON transform files are loaded and applied before ICP refinement.
 
@@ -629,6 +646,9 @@ Options:
   -e, --external-ref <file> External reference STL (CAD or lab scanner)
   --pre-aligned            Skip GPA; run one ICP refinement pass then compute mean mesh
   --normalized             Scans are normalized; skip JSON transform loading (default in GUI)
+  --trim-fraction <f>      TrICP: keep only this fraction of correspondences per iteration
+                           sorted by point-to-plane residual (1.0 = disabled; 0.5 = 50%).
+                           Overrides icp_trim_fraction in study JSON.
   --verbose                Print detailed progress information
   -h, --help               Show help message
 ```
@@ -695,6 +715,7 @@ The batch processor executes these stages for each SKD group:
    - **Pre-aligned ICP** (`--pre-aligned`, no external ref): one ICP pass per scan against scan with most triangles → mean mesh update. GPA iterations skipped.
    - **ICP against external reference** (`--external-ref`): one ICP pass per scan against provided STL
    - Uses **masked ICP** when ROI is defined (focuses on tooth surfaces)
+   - **TrICP** (`icp_trim_fraction < 1.0`): each ICP iteration discards the worst-residual fraction of correspondences before the rigid solve. Keeps stable surfaces (teeth) dominant; suppresses influence of deforming soft tissue.
 6. **Compute distances** - CGAL AABB-tree signed distances to reference
 7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness
 8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
@@ -707,15 +728,17 @@ The batch processor executes these stages for each SKD group:
 ### For Best Results
 
 1. **Use tooth segmentation** - Gingiva deforms between scans; teeth are rigid
-2. **Check statistical outliers** - Yellow-bordered scans may have registration failures
-3. **Use external reference for trueness** - CAD or lab scanner provides ground truth
-4. **Review before statistics** - QC catches registration failures before they corrupt data
+2. **Set TrICP trim fraction for patient scans** - Set `icp_trim_fraction: 0.5` in your study JSON when scans include extensive soft tissue (palate, buccal mucosa). Leave at `1.0` for phantom studies.
+3. **Check statistical outliers** - Yellow-bordered scans may have registration failures
+4. **Use external reference for trueness** - CAD or lab scanner provides ground truth
+5. **Review before statistics** - QC catches registration failures before they corrupt data
 
 ### Common Issues
 
 | Problem | Solution |
 |---------|----------|
 | High RMS values | Check if registration failed; use QC review |
+| RMS in mm range for patient scans | Soft-tissue deformation pulling ICP — set `icp_trim_fraction: 0.5` |
 | Missing files | Verify glob patterns in study.json |
 | Scans rotated 90° | Different scanners use different coordinate systems; ICP should handle this |
 | Memory issues | Process fewer groups at a time |

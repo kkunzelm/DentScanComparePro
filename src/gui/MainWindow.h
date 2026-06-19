@@ -162,6 +162,7 @@ private:
     QLineEdit* m_roiTemplateEdit = nullptr;
     class QCheckBox* m_scansPreAlignedChk = nullptr;
     class QCheckBox* m_scansNormalizedChk = nullptr;
+    class QDoubleSpinBox* m_icpTrimFractionSpin = nullptr;
     QTreeWidget* m_studyTree = nullptr;
     QLabel* m_studyNameLabel = nullptr;
     QLabel* m_scannerCountLabel = nullptr;

@@ -191,6 +191,7 @@ GroupResult GroupProcessor::process(
         if (scansPreAligned || !precomputedTransforms.empty()) {
             icpParams.maxCorrespDist = 5.0;  // mm - scans are already roughly aligned
         }
+        icpParams.trimFraction = alignment.icpTrimFraction;
 
         for (std::size_t i = 0; i < scans.size(); ++i) {
             auto& scan = scans[i];
@@ -236,6 +237,7 @@ GroupResult GroupProcessor::process(
             icpParams.maxIterations = alignment.maxIcpIterations;
             icpParams.maxCorrespDist = 10.0;  // larger window: cross-scanner centroid offsets can exceed 5mm
             icpParams.convergenceRms = alignment.convergenceThreshold;
+            icpParams.trimFraction = alignment.icpTrimFraction;
 
             for (auto& scan : scans) {
                 if (wasCancelled()) return result;
@@ -424,6 +426,7 @@ bool GroupProcessor::runGPAAlignment(
     params.convergenceThresh = alignment.convergenceThreshold;
     params.icpParams.maxIterations = alignment.maxIcpIterations;
     params.skipPcaCoarseAlign = scansNormalized;
+    params.icpParams.trimFraction = alignment.icpTrimFraction;
 
     // Run GPA
     auto gpaRef = GPAReference::compute(scans, params);

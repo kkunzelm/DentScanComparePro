@@ -120,6 +120,15 @@ int main(int argc, char *argv[])
     );
     parser.addOption(alignmentsOption);
 
+    // TrICP trim fraction
+    QCommandLineOption trimFractionOption(
+        "trim-fraction",
+        "TrICP: keep only this fraction of ICP correspondences (by smallest residual). "
+        "1.0 = no trimming (default); 0.5 = keep best 50%, discards soft-tissue deformation.",
+        "fraction"
+    );
+    parser.addOption(trimFractionOption);
+
     parser.process(app);
 
     // Determine mode
@@ -149,6 +158,8 @@ int main(int argc, char *argv[])
         bool preAligned = parser.isSet(preAlignedOption);
         bool normalized = parser.isSet(normalizedOption);
         bool verbose = parser.isSet(verboseOption);
+        double trimFraction = parser.isSet(trimFractionOption)
+            ? parser.value(trimFractionOption).toDouble() : -1.0;
 
         std::cout << "Study file:  " << studyPath.toStdString() << "\n";
         std::cout << "Data root:   " << dataRoot.toStdString() << "\n";
@@ -167,6 +178,9 @@ int main(int argc, char *argv[])
         }
         if (normalized) {
             std::cout << "Normalized:   YES (skip JSON transforms, geometry already transformed)\n";
+        }
+        if (trimFraction >= 0.0) {
+            std::cout << "Trim fraction: " << trimFraction << " (TrICP outlier rejection)\n";
         }
         std::cout << "\n" << std::flush;
 
@@ -187,6 +201,10 @@ int main(int argc, char *argv[])
             }
             if (!alignmentsDir.isEmpty()) {
                 config.alignmentsDirectory = alignmentsDir;
+            }
+            if (trimFraction >= 0.0) {
+                config.alignment.icpTrimFraction = trimFraction;
+                std::cout << "Trim fraction: " << trimFraction << " (CLI override)\n";
             }
             std::cout << " done.\n";
             std::cout << "Study: " << config.name.toStdString() << "\n\n" << std::flush;

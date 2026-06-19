@@ -40,6 +40,10 @@ struct AlignmentConfig {
     double convergenceThreshold = 0.01;  // mm
     bool usePcaCoarse = true;
     bool use4OrientationTest = true;
+    // TrICP trim fraction: keep only this fraction of correspondences with the
+    // smallest point-to-plane residuals (1.0 = no trimming; 0.5 = keep 50%).
+    // Lower values reject more soft-tissue deformation but need stable overlap.
+    double icpTrimFraction = 1.0;
 };
 
 /**

@@ -187,11 +187,10 @@ Result align(
             transSrc[i] = tp.head<3>();
         }
 
-        // find correspondences
-        Eigen::MatrixXd A(srcPts.size(), 6);
-        Eigen::VectorXd b(srcPts.size());
-        int usedCorr = 0;
-        double rmsAcc = 0.0;
+        // Collect valid correspondences (distance-gated)
+        struct Corr { std::array<double,6> aRow; double bVal; double d; };
+        std::vector<Corr> corrList;
+        corrList.reserve(transSrc.size());
 
         for (std::size_t i = 0; i < transSrc.size(); ++i) {
             const Eigen::Vector3d& sp = transSrc[i];
@@ -205,21 +204,32 @@ Result align(
 
             const Eigen::Vector3d& qp = tgtCloud.pts[retIdx];
             const Eigen::Vector3d& n  = tgtNormals[retIdx];
-
-            // point-to-plane: (α × sp + t - (qp - sp)) · n = 0
             Eigen::Vector3d cross = sp.cross(n);
-            A.row(usedCorr) << cross[0], cross[1], cross[2], n[0], n[1], n[2];
-            b[usedCorr] = n.dot(qp - sp);
-
             double d = std::abs(n.dot(sp - qp));
-            rmsAcc += d * d;
-            ++usedCorr;
+            corrList.push_back({{cross[0], cross[1], cross[2], n[0], n[1], n[2]},
+                                n.dot(qp - sp), d});
         }
 
+        // TrICP: discard worst correspondences (deforming soft tissue has high residuals)
+        if (params.trimFraction < 1.0 && !corrList.empty()) {
+            std::sort(corrList.begin(), corrList.end(),
+                      [](const Corr& a, const Corr& b){ return a.d < b.d; });
+            std::size_t keep = std::max<std::size_t>(6,
+                static_cast<std::size_t>(corrList.size() * params.trimFraction));
+            corrList.resize(keep);
+        }
+
+        int usedCorr = static_cast<int>(corrList.size());
         if (usedCorr < 6) break;
 
-        A.conservativeResize(usedCorr, 6);
-        b.conservativeResize(usedCorr);
+        Eigen::MatrixXd A(usedCorr, 6);
+        Eigen::VectorXd b(usedCorr);
+        double rmsAcc = 0.0;
+        for (int i = 0; i < usedCorr; ++i) {
+            for (int j = 0; j < 6; ++j) A(i, j) = corrList[i].aRow[j];
+            b[i] = corrList[i].bVal;
+            rmsAcc += corrList[i].d * corrList[i].d;
+        }
 
         double rms = std::sqrt(rmsAcc / usedCorr);
         result.iterations = iter + 1;
@@ -349,10 +359,9 @@ Result alignMasked(
             transSrc[i] = (cumT * hp).head<3>();
         }
 
-        Eigen::MatrixXd A(srcPts.size(), 6);
-        Eigen::VectorXd b(srcPts.size());
-        int usedCorr = 0;
-        double rmsAcc = 0.0;
+        struct Corr { std::array<double,6> aRow; double bVal; double d; };
+        std::vector<Corr> corrList;
+        corrList.reserve(transSrc.size());
 
         for (std::size_t i = 0; i < transSrc.size(); ++i) {
             const Eigen::Vector3d& sp = transSrc[i];
@@ -365,17 +374,30 @@ Result alignMasked(
             const Eigen::Vector3d& qp = tgtCloud.pts[retIdx];
             const Eigen::Vector3d& n  = tgtNormals[retIdx];
             Eigen::Vector3d cross = sp.cross(n);
-            A.row(usedCorr) << cross[0], cross[1], cross[2], n[0], n[1], n[2];
-            b[usedCorr] = n.dot(qp - sp);
             double d = std::abs(n.dot(sp - qp));
-            rmsAcc += d * d;
-            ++usedCorr;
+            corrList.push_back({{cross[0], cross[1], cross[2], n[0], n[1], n[2]},
+                                n.dot(qp - sp), d});
         }
 
+        if (params.trimFraction < 1.0 && !corrList.empty()) {
+            std::sort(corrList.begin(), corrList.end(),
+                      [](const Corr& a, const Corr& b){ return a.d < b.d; });
+            std::size_t keep = std::max<std::size_t>(6,
+                static_cast<std::size_t>(corrList.size() * params.trimFraction));
+            corrList.resize(keep);
+        }
+
+        int usedCorr = static_cast<int>(corrList.size());
         if (usedCorr < 6) break;
 
-        A.conservativeResize(usedCorr, 6);
-        b.conservativeResize(usedCorr);
+        Eigen::MatrixXd A(usedCorr, 6);
+        Eigen::VectorXd b(usedCorr);
+        double rmsAcc = 0.0;
+        for (int i = 0; i < usedCorr; ++i) {
+            for (int j = 0; j < 6; ++j) A(i, j) = corrList[i].aRow[j];
+            b[i] = corrList[i].bVal;
+            rmsAcc += corrList[i].d * corrList[i].d;
+        }
         double rms = std::sqrt(rmsAcc / usedCorr);
         result.iterations = iter + 1;
         result.finalRms   = rms;

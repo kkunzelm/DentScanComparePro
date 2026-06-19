@@ -101,6 +101,7 @@ serve different use cases:
 | `--external-ref`, `-e` | External reference STL (CAD or lab scanner) |
 | `--pre-aligned` | Skip GPA; run one ICP pass per scan then compute mean mesh. Also skips curvature/tessellation metrics unless a ROI tooth mask is active. Use with DentScanAlignPro normalized output. |
 | `--normalized` | Geometry already contains the baked transform; skip JSON transform loading |
+| `--trim-fraction` | TrICP outlier rejection: keep only this fraction of ICP correspondences per iteration, sorted by point-to-plane residual (1.0 = no trimming; 0.5 = keep best 50%). Overrides `icp_trim_fraction` in study config. |
 | `--verbose` | Print detailed progress information |
 
 ---
@@ -112,7 +113,10 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
 **Phantom study (SKD levels):**
 ```json
 {
-  "study": { "name": "P2024-Kessler", "version": 1, "reference_strategy": "gpa_mean" },
+  "study": {
+    "name": "P2024-Kessler", "version": 1, "reference_strategy": "gpa_mean",
+    "alignment": { "icp_trim_fraction": 1.0 }
+  },
   "scanners": [
     {"id": "Primescan",   "patterns": ["*Primescan*"]},
     {"id": "Trios4",      "patterns": ["*Trios*4*"]},
@@ -131,11 +135,12 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
 }
 ```
 
-**Patient study (mixed-effects design):**
+**Patient study (mixed-effects design) — note `icp_trim_fraction: 0.5` for soft-tissue rejection:**
 ```json
 {
   "study": { "name": "P2026-Nold", "version": 1, "reference_strategy": "gpa_mean",
-             "scans_normalized": true },
+             "scans_normalized": true,
+             "alignment": { "icp_trim_fraction": 0.5 } },
   "scanners": [
     {"id": "Carestream3700", "patterns": ["Carestream3700*"]},
     {"id": "Medit700",       "patterns": ["Medit700*"]},
