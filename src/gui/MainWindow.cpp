@@ -1434,27 +1434,12 @@ void MainWindow::updateROIVisualization()
 
     // Display visualization
     if (!m_currentROI.brushZones.empty()) {
-        // Show brush zones with distinct colors (green=include, red=exclude)
-        std::size_t nInclude = 0, nExclude = 0;
-        for (const auto& zone : m_currentROI.brushZones) {
-            if (zone.include) nInclude++; else nExclude++;
-        }
-        qDebug() << "Visualizing" << m_currentROI.brushZones.size()
-                 << "brush zones:" << nInclude << "include," << nExclude << "exclude";
-
         std::vector<bool> toothMask;
         if (m_useToothMaskChk && m_useToothMaskChk->isChecked() && !m_toothMask.empty()) {
             toothMask = m_toothMask;
         }
         m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, toothMask);
     } else {
-        // No brush zones - show combined ROI mask
-        std::size_t nTrue = std::count(mask.begin(), mask.end(), true);
-        std::size_t nToothTrue = std::count(m_toothMask.begin(), m_toothMask.end(), true);
-        qDebug() << "No brush zones, showing tooth segmentation mask."
-                 << "Combined mask:" << nTrue << "/" << mask.size() << "true,"
-                 << "toothMask:" << nToothTrue << "/" << m_toothMask.size() << "true,"
-                 << "useToothMaskChk:" << (m_useToothMaskChk ? m_useToothMaskChk->isChecked() : false);
         m_roiMeshWidget->showToothSegmentation(m_templateScan, mask);
     }
 
