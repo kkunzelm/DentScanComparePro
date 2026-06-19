@@ -316,6 +316,10 @@ GroupResult GroupProcessor::process(
             std::cout << "    Distance reference (ROI-masked): "
                       << maskedDist->mesh.number_of_vertices() << " / "
                       << referenceMesh->number_of_vertices() << " vertices\n" << std::flush;
+            // Save ROI-masked reference so it can be visually compared to the aligned scans
+            if (!outputDir.isEmpty())
+                QCExporter::exportReferenceMesh(distRefMesh, outputDir,
+                                                result.groupId + "_roi");
         } else {
             std::cout << "    WARNING: ROI distance reference empty — using full reference\n" << std::flush;
         }
