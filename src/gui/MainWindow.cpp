@@ -1154,9 +1154,13 @@ void MainWindow::onPointPicked(double x, double y, double z)
 
 void MainWindow::saveROITemplate()
 {
+    QSettings settings("DentScanComparePro", "DentScanComparePro");
+    QString lastPath = settings.value("paths/lastROIEditorTemplate").toString();
+    QString defaultPath = lastPath.isEmpty() ? "roi_template.json" : lastPath;
+
     QString path = QFileDialog::getSaveFileName(this,
         "Save ROI Template",
-        "roi_template.json",
+        defaultPath,
         "JSON Files (*.json)");
 
     if (path.isEmpty()) return;
@@ -1237,6 +1241,7 @@ void MainWindow::saveROITemplate()
     QFile file(path);
     if (file.open(QIODevice::WriteOnly)) {
         file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+        settings.setValue("paths/lastROIEditorTemplate", path);
         m_statusLabel->setText("ROI template saved: " + path);
     } else {
         QMessageBox::critical(this, "Save Error", "Failed to save ROI template.");
@@ -1245,9 +1250,12 @@ void MainWindow::saveROITemplate()
 
 void MainWindow::loadROITemplate()
 {
+    QSettings settings("DentScanComparePro", "DentScanComparePro");
+    QString lastPath = settings.value("paths/lastROIEditorTemplate").toString();
+
     QString path = QFileDialog::getOpenFileName(this,
         "Load ROI Template",
-        QString(),
+        lastPath,
         "JSON Files (*.json)");
 
     if (path.isEmpty()) return;
@@ -1372,6 +1380,8 @@ void MainWindow::loadROITemplate()
 
         m_seedCountLabel->setText(QString("Seeds: %1").arg(m_seedPoints.size()));
     }
+
+    settings.setValue("paths/lastROIEditorTemplate", path);
 
     // Show all pick spheres (brush + seed points)
     std::vector<std::array<double, 3>> allPoints = m_brushPoints;
