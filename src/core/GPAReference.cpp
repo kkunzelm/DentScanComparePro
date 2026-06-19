@@ -293,14 +293,14 @@ std::shared_ptr<ScanData> compute(
 
             std::cout << "      [" << std::setw(2) << (si + 1) << "/" << scans.size() << "]"
                       << " " << std::left << std::setw(16) << scan->scannerName << std::right
-                      << "  rms=" << std::fixed << std::setprecision(4) << r1.finalRms << " mm"
+                      << "  res=" << std::fixed << std::setprecision(4) << r1.finalRms << " mm"
                       << "  iter=" << std::setw(3) << r1.iterations
                       << (r1.converged ? "" : "  [NOT CONVERGED]")
                       << "\n" << std::flush;
         }
 
         std::cout << "    cycle " << (cycle + 1) << " done"
-                  << "  maxRMS=" << std::fixed << std::setprecision(4) << maxDisp << " mm"
+                  << "  max_res=" << std::fixed << std::setprecision(4) << maxDisp << " mm"
                   << (maxDisp < params.convergenceThresh ? "  [converged]\n" : "\n")
                   << std::flush;
 

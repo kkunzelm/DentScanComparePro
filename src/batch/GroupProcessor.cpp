@@ -270,7 +270,7 @@ GroupResult GroupProcessor::process(
                     ICPRegistration::applyTransform(*scan, r.transform);
                 scan->registered = true;
                 std::cout << "\n      " << scan->scannerName
-                          << "  RMS=" << std::fixed << std::setprecision(4) << r.finalRms << " mm"
+                          << "  res=" << std::fixed << std::setprecision(4) << r.finalRms << " mm"
                           << "  iter=" << r.iterations
                           << (r.converged ? "" : "  [NOT CONVERGED]") << std::flush;
             }
