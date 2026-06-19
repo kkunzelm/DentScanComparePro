@@ -257,7 +257,6 @@ std::shared_ptr<ScanData> compute(
     coarseP.convergenceRms = 0.05;
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
-        double maxDisp = 0.0;
         std::cout << "    GPA cycle " << (cycle + 1) << "/" << params.maxGPAIterations
                   << " (" << scans.size() << " scans):\n" << std::flush;
 
@@ -289,7 +288,6 @@ std::shared_ptr<ScanData> compute(
                         if (progressCallback) progressCallback(cycle, (int)si, rms);
                     });
             ICPRegistration::applyTransform(*scan, r1.transform);
-            maxDisp = std::max(maxDisp, r1.finalRms);
 
             std::cout << "      [" << std::setw(2) << (si + 1) << "/" << scans.size() << "]"
                       << " " << std::left << std::setw(16) << scan->scannerName << std::right
@@ -299,18 +297,35 @@ std::shared_ptr<ScanData> compute(
                       << "\n" << std::flush;
         }
 
+        // Update reference to mean mesh (GPA mode only) and measure convergence
+        // as the max vertex displacement of the reference — not the ICP residual.
+        double refDisp = 0.0;
+        if (params.fixedRefScannerName.empty()) {
+            std::vector<Point3> oldPos;
+            oldPos.reserve(gpaRef->mesh.num_vertices());
+            for (auto v : gpaRef->mesh.vertices())
+                oldPos.push_back(gpaRef->mesh.point(v));
+
+            updateToMeanMesh(*gpaRef, scans);
+
+            std::size_t idx = 0;
+            for (auto v : gpaRef->mesh.vertices()) {
+                const Point3& np = gpaRef->mesh.point(v);
+                double dx = CGAL::to_double(np.x()) - CGAL::to_double(oldPos[idx].x());
+                double dy = CGAL::to_double(np.y()) - CGAL::to_double(oldPos[idx].y());
+                double dz = CGAL::to_double(np.z()) - CGAL::to_double(oldPos[idx].z());
+                refDisp = std::max(refDisp, std::sqrt(dx*dx + dy*dy + dz*dz));
+                ++idx;
+            }
+        }
+
         std::cout << "    cycle " << (cycle + 1) << " done"
-                  << "  max_res=" << std::fixed << std::setprecision(4) << maxDisp << " mm"
-                  << (maxDisp < params.convergenceThresh ? "  [converged]\n" : "\n")
+                  << "  max_ref_disp=" << std::fixed << std::setprecision(4) << refDisp << " mm"
+                  << (refDisp < params.convergenceThresh ? "  [converged]\n" : "\n")
                   << std::flush;
 
-        if (maxDisp < params.convergenceThresh) break;
+        if (refDisp < params.convergenceThresh) break;
     }
-
-    // Update to true mean only for GPA mode; in fixed-reference mode the
-    // chosen scanner stays as the reference (distances to it are reported).
-    if (params.fixedRefScannerName.empty())
-        updateToMeanMesh(*gpaRef, scans);
 
     return gpaRef;
 }

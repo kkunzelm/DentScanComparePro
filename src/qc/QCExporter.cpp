@@ -29,8 +29,11 @@
 #include <vtkPNGWriter.h>
 #include <vtkUnsignedCharArray.h>
 
-#include <fstream>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <fstream>
 
 namespace DentScanBatch {
 
@@ -177,41 +180,74 @@ bool QCExporter::writeBinarySTL(const SurfaceMesh& mesh, const QString& filePath
     return out.good();
 }
 
+// Maps a signed distance value to a blue-white-red colormap.
+// Negative → blue, zero → white, positive → red; clamped to [-rangeMax, +rangeMax].
+static void distanceToRGB(double d, double rangeMax,
+                          uint8_t& r, uint8_t& g, uint8_t& b)
+{
+    double t = std::max(-1.0, std::min(1.0, d / rangeMax)); // [-1, 1]
+    if (t < 0.0) {
+        // blue → white: t in [-1, 0]
+        float s = static_cast<float>(t + 1.0); // [0, 1]
+        r = static_cast<uint8_t>(s * 255);
+        g = static_cast<uint8_t>(s * 255);
+        b = 255;
+    } else {
+        // white → red: t in [0, 1]
+        float s = static_cast<float>(t); // [0, 1]
+        r = 255;
+        g = static_cast<uint8_t>((1.0f - s) * 255);
+        b = static_cast<uint8_t>((1.0f - s) * 255);
+    }
+}
+
 bool QCExporter::writeBinaryPLY(
     const SurfaceMesh& mesh,
     const std::vector<double>& perVertexScalar,
     const QString& scalarName,
-    const QString& filePath)
+    const QString& filePath,
+    double colorRangeMax)
 {
     std::ofstream out(filePath.toStdString(), std::ios::binary);
     if (!out) return false;
 
     const std::size_t nv = mesh.num_vertices();
     const std::size_t nf = mesh.num_faces();
+    const bool hasScalar = (perVertexScalar.size() == nv);
 
-    // PLY header (ASCII)
+    // PLY header (ASCII) — store scalar + pre-computed RGB so MeshLab shows
+    // color immediately without requiring Render → Color → Per-Vertex Quality.
     out << "ply\n"
         << "format binary_little_endian 1.0\n"
         << "element vertex " << nv << "\n"
         << "property float x\n"
         << "property float y\n"
         << "property float z\n"
+        << "property uchar red\n"
+        << "property uchar green\n"
+        << "property uchar blue\n"
         << "property float " << scalarName.toStdString() << "\n"
         << "element face " << nf << "\n"
         << "property list uchar int vertex_indices\n"
         << "end_header\n";
 
-    // Vertex data
-    const bool hasScalar = (perVertexScalar.size() == nv);
+    // Vertex data: xyz + rgb (from colormap) + scalar
     for (auto v : mesh.vertices()) {
         const Point3& p = mesh.point(v);
         float fx = static_cast<float>(p.x());
         float fy = static_cast<float>(p.y());
         float fz = static_cast<float>(p.z());
-        float fd = hasScalar ? static_cast<float>(perVertexScalar[v.idx()]) : 0.0f;
+        double d = hasScalar ? perVertexScalar[v.idx()] : 0.0;
+        float fd = static_cast<float>(d);
+        uint8_t cr, cg, cb;
+        distanceToRGB(d, colorRangeMax, cr, cg, cb);
+
         out.write(reinterpret_cast<const char*>(&fx), 4);
         out.write(reinterpret_cast<const char*>(&fy), 4);
         out.write(reinterpret_cast<const char*>(&fz), 4);
+        out.write(reinterpret_cast<const char*>(&cr), 1);
+        out.write(reinterpret_cast<const char*>(&cg), 1);
+        out.write(reinterpret_cast<const char*>(&cb), 1);
         out.write(reinterpret_cast<const char*>(&fd), 4);
     }
 
@@ -247,7 +283,8 @@ bool QCExporter::exportAlignedMesh(
 bool QCExporter::exportDifferencePLY(
     const std::shared_ptr<ScanData>& scan,
     const QString& outputDir,
-    const QString& filename)
+    const QString& filename,
+    double colorRangeMax)
 {
     if (!scan || !scan->distanceComputed || scan->mesh.is_empty()) return false;
 
@@ -256,7 +293,7 @@ bool QCExporter::exportDifferencePLY(
         dir.mkpath("qc/difference_meshes");
 
     QString fullPath = outputDir + "/qc/difference_meshes/" + filename + ".ply";
-    return writeBinaryPLY(scan->mesh, scan->distanceToRef, "distance", fullPath);
+    return writeBinaryPLY(scan->mesh, scan->distanceToRef, "distance", fullPath, colorRangeMax);
 }
 
 bool QCExporter::exportReferenceMesh(const std::shared_ptr<SurfaceMesh>& mesh,
@@ -630,8 +667,8 @@ QStringList QCExporter::exportGroupQC(const GroupResult& result,
             errors << QString("Failed to export aligned mesh: %1").arg(baseName);
         }
 
-        // Difference PLY with per-vertex signed distance scalar
-        if (!exportDifferencePLY(scan, outputDir, baseName)) {
+        // Difference PLY with per-vertex RGB (blue-white-red) and signed distance scalar
+        if (!exportDifferencePLY(scan, outputDir, baseName, rangeMax)) {
             errors << QString("Failed to export difference PLY: %1").arg(baseName);
         }
 

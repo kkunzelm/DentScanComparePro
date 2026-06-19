@@ -173,14 +173,16 @@ public:
         const QString& filename);
 
     /**
-     * Export scan mesh as PLY with per-vertex signed distance scalar.
-     * Opens in MeshLab (Render → Color → Per-Vertex) or ParaView.
+     * Export scan mesh as PLY with per-vertex RGB (blue-white-red colormap) and
+     * signed distance scalar. Opens colored immediately in MeshLab.
      * Saved to qc/difference_meshes/<filename>.ply
+     * @param colorRangeMax Distance range for colormap (mm); values beyond ±rangeMax clamp to blue/red.
      */
     static bool exportDifferencePLY(
         const std::shared_ptr<ScanData>& scan,
         const QString& outputDir,
-        const QString& filename);
+        const QString& filename,
+        double colorRangeMax = 0.5);
 
 private:
     // Write CGAL Surface_mesh as binary STL
@@ -188,12 +190,14 @@ private:
         const SurfaceMesh& mesh,
         const QString& filePath);
 
-    // Write CGAL Surface_mesh as binary PLY with per-vertex float scalar
+    // Write CGAL Surface_mesh as binary PLY with per-vertex float scalar and
+    // pre-computed RGB (blue-white-red colormap) so MeshLab shows color on open.
     static bool writeBinaryPLY(
         const SurfaceMesh& mesh,
         const std::vector<double>& perVertexScalar,
         const QString& scalarName,
-        const QString& filePath);
+        const QString& filePath,
+        double colorRangeMax = 0.5);
 
     static bool s_imageExportEnabled;
 };
