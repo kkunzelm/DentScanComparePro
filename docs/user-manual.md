@@ -721,9 +721,13 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 
 ### Accuracy Metrics (per scan, after registration)
 
+> **`res=` in batch output vs `RMS_mm` in CSV**
+> During batch processing, each scan's progress line shows `res=X.XXXX mm`. This is the ICP alignment residual — the RMS of the point-to-plane distances `|n · (sp − qp)|` across all correspondences at the last ICP iteration. It measures how tightly the ICP converged, not scan accuracy.
+> `RMS_mm` in the CSV is computed afterwards by `DistanceField`: the RMS of 3D Euclidean distances from every scan vertex to the GPA mean reference mesh. These are different quantities and will differ in magnitude.
+
 | Metric | CSV Column | Description |
 |--------|------------|-------------|
-| **RMS** | `RMS_mm` | Root Mean Square distance to reference (mm). Primary accuracy metric |
+| **RMS** | `RMS_mm` | Root Mean Square 3D distance from each scan vertex to the GPA mean reference (mm). Primary trueness metric. Computed by DistanceField after alignment — distinct from the ICP residual shown in the batch log. |
 | **MAD** | `MAD_mm` | Median Absolute Deviation (mm). Robust to outliers |
 | **H100** | `H100_mm` | Maximum distance (Hausdorff 100%). Dominated by boundary artifacts |
 | **H95** | `H95_mm` | 95th percentile distance. Clinically meaningful: 95% of surface within this |

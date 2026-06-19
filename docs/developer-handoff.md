@@ -101,6 +101,14 @@ Binary STL → polygon soup → CGAL `SurfaceMesh`. Per-face winding verificatio
 
 **Conditional execution**: curvature (and tessellation metrics) are skipped when `scansPreAligned = true` and no ROI tooth mask is configured (`needCurvature` flag in `GroupProcessor::process()`). When scans come from DentScanAlignPro, canonical orientation is already established by an 11-term scorer — recomputing curvature for Z-sign resolution is redundant. Tooth mask segmentation still requires curvature when active.
 
+### ICP residual vs trueness RMS
+
+`ICPRegistration::Result::finalRms` is the RMS of the **point-to-plane** distances `|n · (sp − qp)|` across all kept correspondences at the last ICP iteration. It is the convergence metric for the alignment solve — not a trueness metric. In the batch progress output it appears as `res=` (per scan) and `max_res=` (max across scans per GPA cycle).
+
+`RMS_mm` in the CSV is computed by `DistanceField::fillReport()` after alignment completes: the RMS of the 3D Euclidean distances from each scan vertex to its nearest point on the GPA mean reference mesh. This is the ISO 12836 trueness metric.
+
+They differ in both definition and magnitude. A scan with `res=0.05 mm` (tight ICP convergence) may still have `RMS_mm=0.25 mm` (genuine trueness error) because ICP minimises point-to-plane residuals, not Euclidean distances, and the correspondence set is filtered by `maxCorrespDist`.
+
 ### 3. GPAReference::compute (standard path)
 Three-stage alignment:
 - **Stage 1 – PCA coarse alignment**: Translate to centroid, rotate largest-variance axis → X, smallest → Z. Z-sign resolved via curvature (occlusal = high curvature → +Z). X-sign forced to align with canonical +X to avoid 180° inter-group frame inconsistency.
