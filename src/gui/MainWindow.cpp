@@ -1045,6 +1045,31 @@ void MainWindow::loadTemplateScan()
             QString("Failed to load STL file:\n%1").arg(QString::fromStdString(errorMsg)));
         return;
     }
+
+    // Reset all ROI state to defaults when a new reference file is loaded
+    {
+        QSignalBlocker b1(m_bboxActiveChk), b2(m_zPlaneActiveChk),
+                       b3(m_zAboveSpin),    b4(m_zBelowSpin),
+                       b5(m_useToothMaskChk);
+        m_currentROI = DentScanBatch::ROIConfig{};
+        m_bboxActiveChk->setChecked(false);
+        m_zPlaneActiveChk->setChecked(false);
+        m_zAboveSpin->setValue(2.0);
+        m_zBelowSpin->setValue(12.0);
+        m_useToothMaskChk->setChecked(false);
+    }
+    m_occlusPlaneValid = false;
+    m_occlusPlanePickMode = false;
+    m_occlusPlanePoints.clear();
+    m_occlusPlaneNormal = Eigen::Vector3d(0, 0, 1);
+    m_occlusPlaneOrigin = Eigen::Vector3d(0, 0, 0);
+    m_occlusPlaneStatusLabel->setText("Plane: auto (max-Z)");
+    m_roiMeshWidget->setPlanesVisible(false);
+    m_roiMeshWidget->showPickSpheres({});
+    m_brushPoints.clear();
+    m_seedPoints.clear();
+    m_toothMask.clear();
+
     m_roiMeshWidget->setMesh(m_templateScan);
     m_roiMeshWidget->resetCamera();
 
@@ -1343,10 +1368,19 @@ void MainWindow::saveROITemplate()
         // Build ROI submesh: keep only faces where all 3 vertices pass the current ROI filter
         const auto& refMesh = m_templateScan->mesh;
 
-        // Compute occlusal Z (max Z of reference)
+        // Compute occlusal Z (max Z of reference) — used as fallback when no plane picked
         double z_occlusal = std::numeric_limits<double>::lowest();
         for (auto v : refMesh.vertices())
             z_occlusal = std::max(z_occlusal, refMesh.point(v).z());
+
+        // Sync picked plane into ROIConfig so the STL mask matches the visualized slab
+        m_currentROI.occlusalPlane.active = m_occlusPlaneValid;
+        if (m_occlusPlaneValid) {
+            m_currentROI.occlusalPlane.normal = {
+                m_occlusPlaneNormal[0], m_occlusPlaneNormal[1], m_occlusPlaneNormal[2]};
+            m_currentROI.occlusalPlane.point = {
+                m_occlusPlaneOrigin[0], m_occlusPlaneOrigin[1], m_occlusPlaneOrigin[2]};
+        }
 
         // Mark vertices inside ROI
         std::vector<bool> inROI(refMesh.number_of_vertices(), false);
@@ -1572,6 +1606,15 @@ void MainWindow::updateROIVisualization()
         }
         planeNormal = Eigen::Vector3d(0, 0, 1);
         planeOrigin = Eigen::Vector3d(0, 0, z_occlusal);
+    }
+
+    // Sync the picked plane into ROIConfig so isInROI uses signed-distance, not raw Z
+    m_currentROI.occlusalPlane.active = m_occlusPlaneValid;
+    if (m_occlusPlaneValid) {
+        m_currentROI.occlusalPlane.normal = {
+            m_occlusPlaneNormal[0], m_occlusPlaneNormal[1], m_occlusPlaneNormal[2]};
+        m_currentROI.occlusalPlane.point = {
+            m_occlusPlaneOrigin[0], m_occlusPlaneOrigin[1], m_occlusPlaneOrigin[2]};
     }
 
     // Create mask based on current ROI

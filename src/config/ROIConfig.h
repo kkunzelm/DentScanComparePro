@@ -74,46 +74,6 @@ struct BrushZone {
 };
 
 /**
- * Complete ROI configuration combining all filtering methods.
- * Methods are applied in priority order:
- * 1. Bounding box clips to rectangular region
- * 2. Z-plane slab further restricts within the box
- * 3. Brush zones add/remove specific vertices
- * 4. Statistical σ-clip removes remaining outliers (applied during metrics computation)
- */
-struct ROIConfig {
-    BoundingBox bbox;
-    ZPlaneSlab zPlane;
-    std::vector<BrushZone> brushZones;
-    double outlierSigma = 3.0;  // σ threshold for statistical outlier removal
-
-    /**
-     * Check if a vertex should be included based on geometric ROI.
-     * Does NOT apply σ-clip (that requires distance values).
-     * @param x, y, z Vertex coordinates
-     * @param z_occlusal Z coordinate of the occlusal plane
-     * @return true if vertex passes geometric ROI tests
-     */
-    bool isInROI(double x, double y, double z, double z_occlusal) const {
-        // Start with geometric tests
-        bool inROI = bbox.contains(x, y, z) && zPlane.contains(z, z_occlusal);
-
-        // Brush zones can override geometric ROI
-        for (const auto& zone : brushZones) {
-            if (zone.contains(x, y, z)) {
-                inROI = zone.include;
-            }
-        }
-
-        return inROI;
-    }
-
-    bool isInROI(const std::array<double, 3>& pt, double z_occlusal) const {
-        return isInROI(pt[0], pt[1], pt[2], z_occlusal);
-    }
-};
-
-/**
  * Occlusal plane representation for Z-slab computations.
  * Fitted from picked points or detected automatically.
  */
@@ -134,6 +94,59 @@ struct OcclusalPlane {
 
     double signedDistance(const std::array<double, 3>& pt) const {
         return signedDistance(pt[0], pt[1], pt[2]);
+    }
+};
+
+/**
+ * Complete ROI configuration combining all filtering methods.
+ * Methods are applied in priority order:
+ * 1. Bounding box clips to rectangular region
+ * 2. Z-plane slab further restricts within the box
+ * 3. Brush zones add/remove specific vertices
+ * 4. Statistical σ-clip removes remaining outliers (applied during metrics computation)
+ */
+struct ROIConfig {
+    BoundingBox bbox;
+    ZPlaneSlab zPlane;
+    OcclusalPlane occlusalPlane;  // user-picked reference plane for the z-slab (active=false → use max-Z fallback)
+    std::vector<BrushZone> brushZones;
+    double outlierSigma = 3.0;  // σ threshold for statistical outlier removal
+
+    /**
+     * Check if a vertex should be included based on geometric ROI.
+     * Does NOT apply σ-clip (that requires distance values).
+     * @param x, y, z  Vertex coordinates
+     * @param z_occlusal  Fallback: Z of the occlusal surface (used when no plane was picked)
+     * @return true if vertex passes geometric ROI tests
+     *
+     * When occlusalPlane.active the slab test uses signed distance along the plane
+     * normal so that the coloured region matches the displayed planes.
+     * When inactive the old behaviour (z − z_occlusal) is preserved.
+     */
+    bool isInROI(double x, double y, double z, double z_occlusal) const {
+        // Compute signed distance from the slab reference
+        double dist;
+        if (occlusalPlane.active) {
+            dist = occlusalPlane.signedDistance(x, y, z);
+        } else {
+            dist = z - z_occlusal;
+        }
+
+        bool inSlab = !zPlane.active || (dist >= -zPlane.below_mm && dist <= zPlane.above_mm);
+        bool inROI = bbox.contains(x, y, z) && inSlab;
+
+        // Brush zones can override geometric ROI
+        for (const auto& zone : brushZones) {
+            if (zone.contains(x, y, z)) {
+                inROI = zone.include;
+            }
+        }
+
+        return inROI;
+    }
+
+    bool isInROI(const std::array<double, 3>& pt, double z_occlusal) const {
+        return isInROI(pt[0], pt[1], pt[2], z_occlusal);
     }
 };
 

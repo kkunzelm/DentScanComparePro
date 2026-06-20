@@ -52,6 +52,20 @@ ROITemplate ROITemplate::loadFromFile(const QString& filePath)
         tmpl.roi.zPlane.below_mm = zPlane["below_mm"].toDouble(12.0);
     }
 
+    // Load picked occlusal plane (written by MainWindow::saveROITemplate)
+    if (root.contains("occlusal_plane")) {
+        QJsonObject op = root["occlusal_plane"].toObject();
+        QJsonArray normal = op["normal"].toArray();
+        QJsonArray origin = op["origin"].toArray();
+        if (normal.size() >= 3 && origin.size() >= 3) {
+            tmpl.roi.occlusalPlane.normal = {
+                normal[0].toDouble(), normal[1].toDouble(), normal[2].toDouble()};
+            tmpl.roi.occlusalPlane.point = {
+                origin[0].toDouble(), origin[1].toDouble(), origin[2].toDouble()};
+            tmpl.roi.occlusalPlane.active = true;
+        }
+    }
+
     // Load brush zones
     if (root.contains("brush_zones")) {
         QJsonArray brushArray = root["brush_zones"].toArray();
