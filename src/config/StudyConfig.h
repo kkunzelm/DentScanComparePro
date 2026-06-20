@@ -30,6 +30,7 @@ struct GroupConfig {
     ROIConfig roi;                 // ROI configuration for this group
     QString representativeScan;    // Path to representative scan for template editor
     QString inheritROIFrom;        // ID of group to inherit ROI from (empty = own ROI)
+    QString roiTemplatePath;       // Path to per-group ROI template JSON (overrides study-wide template)
 };
 
 /**

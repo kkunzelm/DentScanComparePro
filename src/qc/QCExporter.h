@@ -184,11 +184,12 @@ public:
         const QString& filename,
         double colorRangeMax = 0.5);
 
-private:
-    // Write CGAL Surface_mesh as binary STL
+    // Write CGAL Surface_mesh as binary STL (also used by ROI template editor)
     static bool writeBinarySTL(
         const SurfaceMesh& mesh,
         const QString& filePath);
+
+private:
 
     // Write CGAL Surface_mesh as binary PLY with per-vertex float scalar and
     // pre-computed RGB (blue-white-red colormap) so MeshLab shows color on open.

@@ -207,6 +207,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
         }
 
         group.representativeScan = grp["representative_scan"].toString();
+        group.roiTemplatePath    = grp["roi_template_file"].toString();
         config.groups.push_back(group);
     }
 
@@ -311,6 +312,9 @@ void StudyConfig::saveToJSON(const QString& path) const {
 
         if (!group.representativeScan.isEmpty()) {
             grpObj["representative_scan"] = group.representativeScan;
+        }
+        if (!group.roiTemplatePath.isEmpty()) {
+            grpObj["roi_template_file"] = group.roiTemplatePath;
         }
 
         groupsArr.append(grpObj);

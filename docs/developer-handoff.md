@@ -1201,6 +1201,51 @@ Computing pairwise distances...... done (M pairs)
 - `src/gui/MainWindow.cpp` - Wire up AlignmentQCDialog
 - `src/CMakeLists.txt` - Added new source files
 
+### 2026-06-21 – Per-patient ROI templates for clinical studies
+
+**Motivation:** Patient cohort studies (e.g. P2026-Nold) have one GPA reference mesh per patient. The occlusal plane height varies >5 mm across patients and jaw orientation differs (upper jaw: crowns at low Z; lower jaw: crowns at high Z). A single shared ROI template cannot correctly exclude soft tissue for all patients.
+
+**Architecture:** Each `GroupConfig` now carries an optional `roiTemplatePath`. At runtime, `GroupProcessor::process()` loads the per-group template into a local `resolvedTemplate` variable, overriding the study-wide template. The study-wide template remains the fallback when no per-group path is set. The `forceFullMesh` flag (set when "Use ROI mask" is unchecked) bypasses per-group templates entirely, consistent with its existing behaviour.
+
+**Files changed:**
+
+`src/config/StudyConfig.h`
+- Added `QString roiTemplatePath` to `GroupConfig` struct.
+
+`src/config/StudyConfig.cpp`
+- `loadFromJSON`: reads `roi_template_file` key from group object → `group.roiTemplatePath`.
+- `saveToJSON`: writes `roi_template_file` key only when `roiTemplatePath` is non-empty.
+
+`src/qc/QCExporter.h`
+- Moved `writeBinarySTL` from `private:` to `public:` so `MainWindow::saveROITemplate()` can call it to export the ROI mask STL alongside the template JSON.
+
+`src/gui/MainWindow.h`
+- Added slot `onGroupSelectorChanged(int index)`.
+- Added member `QComboBox* m_groupSelectorCombo`.
+
+`src/gui/MainWindow.cpp`
+- Added `#include <QComboBox>`, `#include <unordered_map>`, `#include <limits>`.
+- `setupROITab()`: inserts a "Patient / Group" QGroupBox with a QComboBox above the Bounding Box section. Combo is populated and enabled by `updateStudyOverview()`.
+- `updateStudyOverview()`: populates combo with group IDs; adds `✓` suffix to labels whose `roiTemplatePath` is non-empty.
+- `onGroupSelectorChanged(int index)`: auto-loads the group's reference STL. Priority: `group.representativeScan` → `<study_dir>/qc/reference_meshes/<id>_reference.stl` → `<outputDir>/qc/reference_meshes/<id>_reference.stl`.
+- `saveROITemplate()`: after writing the template JSON, builds an ROI submesh from `m_currentROI.isInROI()` on `m_templateScan`, writes it as a binary STL via `DentScanBatch::QCExporter::writeBinarySTL()`, stores the JSON path in `m_studyConfig.groups[groupIdx].roiTemplatePath`, adds `✓` to the combo label, and saves the study config back to disk.
+
+`src/batch/GroupProcessor.cpp`
+- Added `#include <QFile>`.
+- Start of `process()`: declares `std::optional<ROITemplate> resolvedTemplate = roiTemplate`. If `!forceFullMesh && !group.roiTemplatePath.isEmpty()` and the file exists, loads it via `ROITemplate::loadFromFile()` into `resolvedTemplate` with a console message. Missing file emits a warning into `result.warnings`.
+- All four subsequent uses of `roiTemplate` in `process()` replaced with `resolvedTemplate`.
+
+**UX:**
+- Group selector dropdown at top of ROI tab cycles through patients; auto-loads each patient's reference mesh.
+- Save Template writes JSON + mask STL and updates the study JSON in one click.
+- `✓` suffix in dropdown gives immediate visual confirmation that a template is saved for each group.
+- "Use ROI mask for registration" checkbox must be checked for per-group templates to take effect (consistent with existing masked ICP behaviour).
+
+**Z-orientation caveat (documented in user manual):**
+- Canonical Z increases toward skull: upper jaw crowns are at *low* Z, lower jaw crowns at *high* Z.
+- `computeOcclusalZ()` (used by the Plane Slab auto-detect) returns max Z — correct for lower jaw only.
+- For upper jaw patients use Brush Exclude or Tooth Segmentation instead of relying on the Plane Slab.
+
 ### 2026-06-03 – Landmark Registration Debugging (Part 5)
 
 **Coordinate System Investigation:**

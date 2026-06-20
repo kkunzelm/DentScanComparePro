@@ -12,6 +12,7 @@
 #include "../core/ArchMetrics.h"
 #include "../qc/QCExporter.h"
 #include <QFileInfo>
+#include <QFile>
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -50,16 +51,34 @@ GroupResult GroupProcessor::process(
     m_cancelled = false;
     m_currentStep = 0;
 
+    // Per-group ROI template overrides the study-wide template when set
+    std::optional<ROITemplate> resolvedTemplate = roiTemplate;
+    if (!forceFullMesh && !group.roiTemplatePath.isEmpty()) {
+        if (QFile::exists(group.roiTemplatePath)) {
+            try {
+                resolvedTemplate = ROITemplate::loadFromFile(group.roiTemplatePath);
+                std::cout << "    Per-group ROI template: "
+                          << group.roiTemplatePath.toStdString() << "\n" << std::flush;
+            } catch (const std::exception& e) {
+                result.warnings.append(QString("Failed to load per-group ROI template '%1': %2")
+                    .arg(group.roiTemplatePath).arg(e.what()));
+            }
+        } else {
+            result.warnings.append(QString("Per-group ROI template not found: %1")
+                .arg(group.roiTemplatePath));
+        }
+    }
+
     // Calculate total steps based on options
     // Curvature is skipped when scans are pre-aligned and no ROI tooth mask is needed
-    bool needCurvature = !scansPreAligned || (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty());
+    bool needCurvature = !scansPreAligned || (resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty());
 
     int steps = 4; // Load, Distances, Trueness, Precision
     if (needCurvature) steps++; // Curvature + tessellation
     if (externalRefPath.isEmpty()) {
         steps++; // GPA alignment or pre-aligned ICP refinement
     }
-    if (roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+    if (resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
         steps++; // Tooth segmentation (now before alignment)
     }
     m_totalSteps = steps;
@@ -71,8 +90,8 @@ GroupResult GroupProcessor::process(
 
     // Effective ROI for both ICP masking and metric evaluation.
     // Computed once here so all stages share the same config.
-    const ROIConfig effectiveROI = (!forceFullMesh && roiTemplate.has_value())
-                                   ? roiTemplate->roi : group.roi;
+    const ROIConfig effectiveROI = (!forceFullMesh && resolvedTemplate.has_value())
+                                   ? resolvedTemplate->roi : group.roi;
 
     // Whether to apply the geometric ROI to the REFERENCE mesh (recommended approach).
     // Masking the reference once means the absolute-coordinate ROI only needs to
@@ -130,10 +149,10 @@ GroupResult GroupProcessor::process(
     // This allows masked ICP to focus on tooth surfaces
     // Skip when forceFullMesh is set (user disabled ROI/masked ICP in GUI)
     std::vector<std::vector<bool>> toothMasks;
-    if (!forceFullMesh && roiTemplate.has_value() && roiTemplate->useToothMask && !roiTemplate->toothSeeds.empty()) {
+    if (!forceFullMesh && resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
         emit progressUpdated(++m_currentStep, m_totalSteps, "Computing tooth segmentation");
         std::cout << "    Computing tooth segmentation..." << std::flush;
-        toothMasks = computeToothMasks(scans, *roiTemplate);
+        toothMasks = computeToothMasks(scans, *resolvedTemplate);
         std::cout << " done (" << toothMasks.size() << " masks)\n" << std::flush;
     } else if (forceFullMesh) {
         std::cout << "    Tooth segmentation: SKIPPED (full-mesh mode)\n" << std::flush;

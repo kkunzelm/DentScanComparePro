@@ -8,6 +8,7 @@ Based on the core algorithms from [DentScanCompare](../DentScanCompare/), extend
 - JSON-driven batch configuration with generic group IDs
 - Automated file discovery via glob patterns with scanner ID matching
 - Per-group GPA alignment with incremental save/resume
+- **Per-patient ROI templates**: each patient group carries its own ROI definition (selected interactively in the GUI, saved as JSON + ROI mask STL, auto-linked in the study config)
 - Quality Control (QC) workflow with visual verification and re-registration
 - CSV output for statistical analysis (R, SPSS, etc.)
 
@@ -75,6 +76,7 @@ serve different use cases:
 ### Integration
 - Load pre-computed transforms from DentScanAlign
 - ROI templates: any active geometric component (bounding box, plane slab, brush zones) is applied to the **reference mesh once** to create a trimmed submesh; all source scans then align to that masked reference via standard ICP. This makes ROI-restricted alignment robust to inter-scanner offsets — source scans use their full geometry during alignment. Tooth segmentation seeds additionally filter metric computation per scan.
+- **Per-patient ROI**: in clinical studies each patient group can carry its own ROI template JSON + mask STL (generated interactively in the ROI Template Editor, linked via `roi_template_file` in the study JSON). GroupProcessor loads the per-group template at runtime, overriding any study-wide template.
 - External reference support (CAD or lab scanner STL)
 
 ---
@@ -156,8 +158,8 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
     {"id": "Trios3",         "patterns": ["Trios3*"]}
   ],
   "groups": [
-    {"id": "002", "file_patterns": ["*_002_*_aligned.stl"]},
-    {"id": "003", "file_patterns": ["*_003_*_aligned.stl"]}
+    {"id": "002", "file_patterns": ["*_002_*_aligned.stl"], "roi_template_file": "roi/002_roi_template.json"},
+    {"id": "003", "file_patterns": ["*_003_*_aligned.stl"], "roi_template_file": "roi/003_roi_template.json"}
   ],
   "output": {
     "base_dir": "./results_P2026_Nold",

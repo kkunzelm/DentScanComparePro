@@ -34,6 +34,7 @@
 #include <QHeaderView>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QtConcurrent>
 #include <QApplication>
 #include <QJsonDocument>
@@ -42,6 +43,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
+#include <unordered_map>
+#include <limits>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -400,6 +403,20 @@ void MainWindow::setupROITab()
     auto* rightPanel = new QWidget();
     auto* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setSpacing(8);
+
+    // Per-group selector
+    auto* groupSelGroup = new QGroupBox("Patient / Group");
+    auto* groupSelLayout = new QHBoxLayout(groupSelGroup);
+    m_groupSelectorCombo = new QComboBox();
+    m_groupSelectorCombo->setToolTip(
+        "Select a patient group to edit its individual ROI template.\n"
+        "Saving the template will update the study config automatically.");
+    m_groupSelectorCombo->addItem("(no study loaded)");
+    m_groupSelectorCombo->setEnabled(false);
+    connect(m_groupSelectorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onGroupSelectorChanged);
+    groupSelLayout->addWidget(m_groupSelectorCombo);
+    rightLayout->addWidget(groupSelGroup);
 
     // Bounding Box group
     auto* bboxGroup = new QGroupBox("Bounding Box");
@@ -982,6 +999,21 @@ void MainWindow::updateStudyOverview()
     }
 
     m_studyTree->resizeColumnToContents(0);
+
+    // Populate group selector in ROI tab
+    {
+        QSignalBlocker blocker(m_groupSelectorCombo);
+        m_groupSelectorCombo->clear();
+        for (const auto& group : m_studyConfig.groups) {
+            QString label = group.id;
+            if (!group.roiTemplatePath.isEmpty())
+                label += " ✓";
+            m_groupSelectorCombo->addItem(label, group.id);
+        }
+        m_groupSelectorCombo->setEnabled(!m_studyConfig.groups.empty());
+        if (!m_studyConfig.groups.empty())
+            m_groupSelectorCombo->setCurrentIndex(0);
+    }
 }
 
 void MainWindow::browseTemplateScan()
@@ -1043,6 +1075,60 @@ void MainWindow::loadTemplateScan()
     m_bboxMaxZ->setValue(m_templateScan->boundsMax[2]);
 
     m_statusLabel->setText("Template scan loaded: " + path);
+}
+
+void MainWindow::onGroupSelectorChanged(int index)
+{
+    if (!m_configLoaded || index < 0 || index >= static_cast<int>(m_studyConfig.groups.size()))
+        return;
+
+    const auto& group = m_studyConfig.groups[index];
+
+    // If the group already has a saved ROI template, load it
+    if (!group.roiTemplatePath.isEmpty() && QFile::exists(group.roiTemplatePath)) {
+        m_templatePathEdit->clear();
+        // Load template (reuses existing loadROITemplate logic via direct file path)
+        QFile file(group.roiTemplatePath);
+        if (file.open(QIODevice::ReadOnly)) {
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+            if (parseError.error == QJsonParseError::NoError) {
+                // Trigger the full load path by temporarily setting last-used path
+                QSettings settings("DentScanComparePro", "DentScanComparePro");
+                settings.setValue("paths/lastROIEditorTemplate", group.roiTemplatePath);
+            }
+        }
+    }
+
+    // Auto-load the reference STL for this group if we can find it.
+    // Priority: group.representativeScan → QC reference mesh next to the study file.
+    QString stlToLoad;
+    if (!group.representativeScan.isEmpty() && QFile::exists(group.representativeScan)) {
+        stlToLoad = group.representativeScan;
+    } else {
+        // Derive from study file location: <study_dir>/qc/reference_meshes/<id>_reference.stl
+        QFileInfo studyFi(m_studyPathEdit->text());
+        QString candidate = studyFi.dir().absoluteFilePath(
+            QString("qc/reference_meshes/%1_reference.stl").arg(group.id));
+        // Also try the output dir configured in the batch tab
+        QString outputCandidate;
+        if (!m_outputDirEdit->text().isEmpty()) {
+            outputCandidate = QDir(m_outputDirEdit->text()).absoluteFilePath(
+                QString("qc/reference_meshes/%1_reference.stl").arg(group.id));
+        }
+        if (QFile::exists(candidate))
+            stlToLoad = candidate;
+        else if (!outputCandidate.isEmpty() && QFile::exists(outputCandidate))
+            stlToLoad = outputCandidate;
+    }
+
+    if (!stlToLoad.isEmpty()) {
+        m_templatePathEdit->setText(stlToLoad);
+        loadTemplateScan();
+        m_statusLabel->setText(QString("Group %1: loaded reference STL").arg(group.id));
+    } else {
+        m_statusLabel->setText(QString("Group %1 selected — browse or load a reference STL").arg(group.id));
+    }
 }
 
 void MainWindow::onBBoxChanged()
@@ -1241,13 +1327,84 @@ void MainWindow::saveROITemplate()
     root["tooth_segmentation"] = segObj;
 
     QFile file(path);
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-        settings.setValue("paths/lastROIEditorTemplate", path);
-        m_statusLabel->setText("ROI template saved: " + path);
-    } else {
+    if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::critical(this, "Save Error", "Failed to save ROI template.");
+        return;
     }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    file.close();
+    settings.setValue("paths/lastROIEditorTemplate", path);
+
+    // Export ROI mask as STL alongside the JSON template
+    QString stlPath = QFileInfo(path).absolutePath() + "/" +
+                      QFileInfo(path).completeBaseName() + "_roi_mask.stl";
+    bool stlOk = false;
+    if (m_templateScan) {
+        // Build ROI submesh: keep only faces where all 3 vertices pass the current ROI filter
+        const auto& refMesh = m_templateScan->mesh;
+
+        // Compute occlusal Z (max Z of reference)
+        double z_occlusal = std::numeric_limits<double>::lowest();
+        for (auto v : refMesh.vertices())
+            z_occlusal = std::max(z_occlusal, refMesh.point(v).z());
+
+        // Mark vertices inside ROI
+        std::vector<bool> inROI(refMesh.number_of_vertices(), false);
+        std::size_t idx = 0;
+        for (auto v : refMesh.vertices())
+            inROI[idx++] = m_currentROI.isInROI(
+                refMesh.point(v).x(), refMesh.point(v).y(), refMesh.point(v).z(), z_occlusal);
+
+        // Build submesh
+        SurfaceMesh roiMesh;
+        std::unordered_map<std::size_t, SurfaceMesh::Vertex_index> vmap;
+        for (auto f : refMesh.faces()) {
+            auto hh = refMesh.halfedge(f);
+            auto v0 = refMesh.source(hh);
+            auto v1 = refMesh.target(hh);
+            auto v2 = refMesh.target(refMesh.next(hh));
+            if (!inROI[v0.idx()] || !inROI[v1.idx()] || !inROI[v2.idx()])
+                continue;
+            for (auto vx : {v0, v1, v2}) {
+                if (!vmap.count(vx.idx()))
+                    vmap[vx.idx()] = roiMesh.add_vertex(refMesh.point(vx));
+            }
+            roiMesh.add_face(vmap[v0.idx()], vmap[v1.idx()], vmap[v2.idx()]);
+        }
+
+        if (roiMesh.number_of_faces() > 0) {
+            stlOk = DentScanBatch::QCExporter::writeBinarySTL(roiMesh, stlPath);
+        } else {
+            QMessageBox::warning(this, "ROI Empty",
+                "The current ROI excludes all faces — ROI mask STL not written.\n"
+                "Check that at least one ROI filter is active and overlaps the mesh.");
+        }
+    }
+
+    // Update per-group ROI template path in the loaded study config
+    int groupIdx = m_groupSelectorCombo->currentIndex();
+    if (m_configLoaded && groupIdx >= 0 && groupIdx < static_cast<int>(m_studyConfig.groups.size())) {
+        m_studyConfig.groups[groupIdx].roiTemplatePath = path;
+
+        // Refresh the combo label to show the ✓ indicator
+        QString label = m_studyConfig.groups[groupIdx].id + " ✓";
+        m_groupSelectorCombo->setItemText(groupIdx, label);
+
+        // Write updated study config back to disk
+        QString studyPath = m_studyPathEdit->text();
+        if (!studyPath.isEmpty()) {
+            try {
+                m_studyConfig.saveToFile(studyPath);
+            } catch (const std::exception& e) {
+                QMessageBox::warning(this, "Config Save Warning",
+                    QString("ROI template saved but could not update study config:\n%1").arg(e.what()));
+            }
+        }
+    }
+
+    QString msg = QString("ROI template saved: %1").arg(path);
+    if (stlOk) msg += QString("\nROI mask STL: %1").arg(stlPath);
+    m_statusLabel->setText(msg);
 }
 
 void MainWindow::loadROITemplate()

@@ -209,6 +209,33 @@ Use this mode to:
 - **"Clear Manual Overrides"** button: Removes all green/red brush zones. Does NOT affect the Base Selection.
 - To reset the Base Selection: Re-run Tooth Segmentation with the same or different seed points.
 
+### Step 3b: Per-Patient ROI for Clinical Studies
+
+In patient cohort studies the occlusal plane height, jaw orientation, and soft-tissue extent differ per patient, so a single shared ROI template cannot correctly exclude gingiva and buccal mucosa for all patients. Use the per-patient ROI workflow to define an individual ROI for each patient group before running the batch.
+
+**Prerequisite:** Run one batch job first (without ROI) so that `qc/reference_meshes/` is populated with one GPA mean reference STL per patient group.
+
+**Workflow:**
+
+1. Load your study JSON in the **Study Configuration** tab and click **Load Configuration**.
+2. Go to the **ROI Template Editor** tab.
+3. In the **Patient / Group** selector at the top of the tab, choose the patient group (e.g. `002`). The application automatically loads the corresponding reference mesh from `qc/reference_meshes/002_reference.stl` (or the path set in `representative_scan`).
+4. Define the ROI using any combination of the available tools:
+   - **Bounding Box** — coarse rectangular clip
+   - **Plane Slab (ROI Height)** — slab above/below a picked plane (useful when crown orientation is known)
+   - **Brush Exclude/Include zones** — paint regions to force-exclude soft tissue or force-include tooth margins
+   - **Tooth Segmentation (Dijkstra)** — place seeds on tooth cusps and run segmentation for a crown-only mask
+5. Click **Save Template...** in the ROI Template I/O section. This writes:
+   - The ROI template JSON file (e.g. `roi/002_roi_template.json`)
+   - An ROI mask STL (`roi/002_roi_template_mask.stl`) for visual verification in MeshLab/ParaView
+   - Updates the `roi_template_file` field for group `002` in the study JSON on disk
+   - The group selector label changes to `002 ✓` to indicate the template is saved
+6. Select the next patient group from the selector and repeat steps 4–5 until all groups have a ✓.
+
+**Important:** After completing per-patient ROI setup, go to the **Batch Processing** tab and ensure **"Use ROI mask for registration (masked ICP)"** is checked. If this checkbox is unchecked, all per-group ROI templates are ignored and the batch runs with full-mesh ICP.
+
+**Note on jaw orientation:** In the canonical coordinate system used by this software, Z increases toward the skull. Upper jaw crowns therefore have *lower* Z values than roots; lower jaw crowns have *higher* Z values than roots. The automatic `computeOcclusalZ()` function (which uses max-Z) is correct only for the lower jaw. For upper jaw patients, use the Brush Exclude tool or Tooth Segmentation rather than relying on the Plane Slab alone.
+
 ### Step 4: Run Batch Processing
 
 **GUI Mode:**
