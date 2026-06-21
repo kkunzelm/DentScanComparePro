@@ -2022,9 +2022,14 @@ void MainWindow::onOcclusPlanePicked(double x, double y, double z)
 
         m_occlusPlaneStatusLabel->setText(QString("Plane: defined at Z=%1").arg(m_occlusPlaneOrigin.z(), 0, 'f', 1));
 
+        // Auto-enable the Plane Slab Active checkbox — there is no reason to pick
+        // an occlusal plane and then not use it for z-slab filtering.
+        if (!m_zPlaneActiveChk->isChecked())
+            m_zPlaneActiveChk->setChecked(true);  // fires onZPlaneChanged()
+
         // Exit pick mode
         m_pickOcclusPlaneBtn->setChecked(false);
-        m_statusLabel->setText("Occlusal plane defined from 3 points.");
+        m_statusLabel->setText("Occlusal plane defined from 3 points. Plane Slab enabled.");
 
         updateROIVisualization();
     }
