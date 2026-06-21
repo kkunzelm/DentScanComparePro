@@ -211,30 +211,203 @@ Use this mode to:
 
 ### Step 3b: Per-Patient ROI for Clinical Studies
 
-In patient cohort studies the occlusal plane height, jaw orientation, and soft-tissue extent differ per patient, so a single shared ROI template cannot correctly exclude gingiva and buccal mucosa for all patients. Use the per-patient ROI workflow to define an individual ROI for each patient group before running the batch.
+---
 
-**Prerequisite:** Run one batch job first (without ROI) so that `qc/reference_meshes/` is populated with one GPA mean reference STL per patient group.
+#### Why every patient needs their own ROI
 
-**Workflow:**
+When you scan real patients — rather than a standardised phantom — each person's scan looks different:
 
-1. Load your study JSON in the **Study Configuration** tab and click **Load Configuration**.
-2. Go to the **ROI Template Editor** tab.
-3. In the **Patient / Group** selector at the top of the tab, choose the patient group (e.g. `002`). The application automatically loads the corresponding reference mesh from `qc/reference_meshes/002_reference.stl` (or the path set in `representative_scan`).
-4. Define the ROI using any combination of the available tools:
-   - **Bounding Box** — coarse rectangular clip
-   - **Plane Slab (ROI Height)** — slab above/below a picked plane (useful when crown orientation is known)
-   - **Brush Exclude/Include zones** — paint regions to force-exclude soft tissue or force-include tooth margins
-   - **Tooth Segmentation (Dijkstra)** — place seeds on tooth cusps and run segmentation for a crown-only mask
-5. Click **Save Template...** in the ROI Template I/O section. This writes:
-   - The ROI template JSON file (e.g. `roi/002_roi_template.json`)
-   - An ROI mask STL (`roi/002_roi_template_mask.stl`) for visual verification in MeshLab/ParaView
-   - Updates the `roi_template_file` field for group `002` in the study JSON on disk
-   - The group selector label changes to `002 ✓` to indicate the template is saved
-6. Select the next patient group from the selector and repeat steps 4–5 until all groups have a ✓.
+- The **height of the occlusal plane** varies: one patient's teeth may sit 5 mm higher in the image than another's.
+- The **jaw orientation** varies: the arch may be tilted to the left, right, forward, or backward depending on how the patient held their head during scanning.
+- The **amount of soft tissue** in the scan varies: some patients show extensive gingiva, buccal mucosa, or palatal tissue; others show mainly teeth.
 
-**Important:** After completing per-patient ROI setup, go to the **Batch Processing** tab and ensure **"Use ROI mask for registration (masked ICP)"** is checked. If this checkbox is unchecked, all per-group ROI templates are ignored and the batch runs with full-mesh ICP.
+Because of these differences, a single ROI mask defined on one patient's reference scan will **not transfer correctly** to another patient's scan. If you try to use a shared mask, it will cut off the wrong part of the mesh — either slicing through the teeth of one patient or leaving gingiva included for another.
 
-**Note on jaw orientation:** In the canonical coordinate system used by this software, Z increases toward the skull. Upper jaw crowns therefore have *lower* Z values than roots; lower jaw crowns have *higher* Z values than roots. The automatic `computeOcclusalZ()` function (which uses max-Z) is correct only for the lower jaw. For upper jaw patients, use the Brush Exclude tool or Tooth Segmentation rather than relying on the Plane Slab alone.
+The solution is to define a **separate ROI mask for every patient group**. Once defined and saved, the software automatically applies the correct mask for each patient when the batch runs — you do not need to do anything extra during the batch.
+
+---
+
+#### What an ROI mask does (plain language)
+
+Think of the ROI mask as a **stencil** that you place over the patient's reference mesh. Everything inside the stencil — typically the tooth surfaces — is included in the analysis. Everything outside the stencil — gingiva, scan borders, soft tissue — is ignored during alignment and metric computation.
+
+The stencil is defined interactively on the **reference mesh** of each patient (which is the average surface computed from all scanners during the first batch run). Once you have drawn the stencil, the software saves it as a small JSON file alongside an STL file showing which triangles are included. During the actual batch run, the software loads this stencil for each patient and applies it automatically.
+
+---
+
+#### Two-step process overview
+
+```
+Step A  Run batch once WITHOUT any ROI mask
+        → Software creates reference_meshes/ folder with one STL per patient
+
+Step B  For each patient (one at a time):
+        → Load that patient's reference STL in the ROI Template Editor
+        → Draw the ROI mask (exclude gingiva, include teeth)
+        → Save the template  (software records it in the study config file)
+
+Step C  Run batch again WITH "Use ROI mask" checked
+        → Each patient's own ROI mask is loaded and applied automatically
+```
+
+You only need to do Steps A and B once. After all per-patient masks are saved, you can run Step C (and re-run it if needed) as many times as you like.
+
+---
+
+#### Step A — First batch run (without ROI, to generate reference meshes)
+
+1. Make sure the **"Use ROI mask for registration (masked ICP)"** checkbox in the **Batch Processing** tab is **unchecked** for this first run. You want the software to process all patients with the full mesh so it can create the reference surfaces.
+2. Run the batch as normal (see Step 4 in this manual).
+3. When the batch finishes, look inside the output directory you specified. You should find a folder called `qc/reference_meshes/`. Inside it there is one file per patient, named like `002_reference.stl`, `003_reference.stl`, and so on. These are the **GPA mean reference meshes** — the average surface computed from all scanner repetitions for each patient. This is the surface you will use as the basis for defining each patient's ROI mask.
+
+> **If the output folder already exists from a previous run**, the reference meshes are already there and you can skip Step A entirely.
+
+---
+
+#### Step B — Define ROI masks, one patient at a time
+
+You will repeat the following steps for every patient in your study. The procedure takes 2–5 minutes per patient once you are familiar with it.
+
+##### Open the ROI Template Editor
+
+1. Start DentScanComparePro.
+2. Load your study configuration file in the **Study Configuration** tab and click **Load Configuration**.
+3. Click the **ROI Template Editor** tab.
+
+##### Load the patient's reference mesh
+
+4. In the **ROI Template I/O** section at the top right of the tab, click the **Browse...** button next to "Template STL".
+5. Navigate to the `qc/reference_meshes/` folder inside your output directory.
+6. Select the file for the first patient you want to work on, for example `002_reference.stl`.
+7. Click **Load**. The patient's reference mesh appears in the 3D viewport. All ROI settings reset to a blank state — brush zones, plane slab picks, bounding box, and seed points are all cleared, ready for you to define a fresh ROI for this patient.
+
+> **Tip:** You can rotate the 3D view by left-click-dragging, zoom with the scroll wheel, and pan with middle-click-drag.
+
+##### Define the ROI for this patient
+
+You have four tools available. You can use any combination — for example, a Plane Slab to cut off the bottom (roots and gingiva below the crowns) combined with a Brush Exclude zone to remove a patch of buccal mucosa that the Plane Slab missed.
+
+---
+
+**Tool 1 — Plane Slab (most useful for patient scans)**
+
+The Plane Slab defines a slab of space above and below a plane you pick on the tooth surface. Everything outside the slab is excluded from analysis. This is the primary tool for cutting off gingiva and roots.
+
+How to use it:
+
+1. Check the **"Active"** checkbox in the **Plane Slab (ROI Height)** section.
+2. Click the **"Pick Plane"** button. The cursor changes to a crosshair.
+3. Click on the tooth surface at the level where you want the plane to pass — typically on the buccal surfaces of the teeth at the gingival margin, or just above the cervical line. You need to place **3 points** to define the plane. After the third click, the software fits a plane through your three points and draws it as a semi-transparent grey disk over the mesh.
+4. Adjust the **"Offset A (above)"** spinbox to set how many millimetres above the plane are included (this controls how much of the crown is included — typically 8–15 mm depending on crown height).
+5. Adjust the **"Offset B (below)"** spinbox to set how many millimetres below the plane are included (typically 1–3 mm to include a small buffer below the CEJ).
+6. The coloured ROI mask updates live in the viewport. Green areas are inside the ROI; darker areas are excluded. Rotate the mesh to check that the slab is cutting in the right place for this patient.
+
+> **Important note for upper jaw patients:** In the coordinate system this software uses, Z increases toward the skull. For lower jaw scans, the tooth crowns are at the top (high Z) and the roots point downward (low Z) — the Plane Slab works naturally. For upper jaw scans, the geometry is inverted: crowns point downward (low Z) and the palate is at the top (high Z). The automatic plane height detection may not work correctly for upper jaw patients. In those cases, use the Plane Slab by manually picking points, and verify the result visually before saving.
+
+---
+
+**Tool 2 — Brush Exclude / Include**
+
+The brush tool lets you paint areas directly onto the mesh surface to force-exclude or force-include them from the ROI. Use it to remove patches of gingiva or buccal mucosa that the Plane Slab did not cleanly cut off.
+
+How to use it:
+
+1. Set the **Radius** spinbox to the brush size in millimetres (e.g. 3 mm for a medium brush, 8 mm for a large sweep).
+2. Click the **"Exclude"** button (turns red) to activate the exclusion brush.
+3. Click on the mesh surface over the area you want to exclude. Each click paints a spherical zone around that point. The excluded area turns dark in the viewport.
+4. To include an area that was incorrectly excluded, click the **"Include"** button and paint over it.
+5. Click **"Exclude"** or **"Include"** again to deactivate the brush (or click a different pick tool).
+
+> **Tip:** You can combine the Plane Slab and Brush tools freely. The Plane Slab cuts the bulk of the gingiva; the Brush cleans up individual patches that the slab missed.
+
+> **Note:** Clicking "Include" or "Exclude" activates pick mode — the cursor changes and you can click on the mesh. Clicking the same button again deactivates it. Clicking a different tool (e.g. "Pick Plane") also deactivates the brush automatically.
+
+---
+
+**Tool 3 — Bounding Box**
+
+The bounding box restricts analysis to a rectangular region in 3D space. It is less useful for patient scans (where the Plane Slab is usually better) but can be helpful for cutting off the lateral borders of the scan or the posterior end of the arch.
+
+How to use it:
+
+1. Check the **"Active"** checkbox in the **Bounding Box** section.
+2. Adjust the Min X/Y/Z and Max X/Y/Z spinboxes to frame the region of interest. The current mesh bounds are filled in automatically when you load a file.
+3. A wireframe box appears in the viewport showing the current bounding region.
+
+---
+
+**Tool 4 — Tooth Segmentation (most precise, but slowest)**
+
+Tooth Segmentation uses an algorithm that grows outward from points you click on tooth cusp tips and automatically stops at the gingival margin. It produces the most precise tooth-only mask but requires placing seed points carefully and running a computation step.
+
+How to use it:
+
+1. Click **"Pick Seeds"**.
+2. Click once on the tip of each cusp or incisal edge visible in the scan — one click per tooth. Yellow numbered spheres appear at each picked location.
+3. Click **"Run Segmentation"**. After a few seconds (depending on mesh size), the tooth surfaces are highlighted in ivory and the excluded areas in dark grey.
+4. If the segmentation missed a tooth or included too much gingiva, you can:
+   - Add more seed points on missed areas and re-run.
+   - Use the Brush Exclude tool to paint over incorrectly included gingiva.
+5. Check **"Use Base Selection as ROI"** to include the segmentation result in the final ROI mask.
+
+> **For most patient cohort studies**, the Plane Slab combined with Brush Exclude zones gives sufficient accuracy and is much faster than Tooth Segmentation. Reserve Tooth Segmentation for studies where precise crown-only boundaries are critical, or when the Plane Slab cannot cleanly separate crowns from gingiva due to unusual jaw orientation.
+
+---
+
+##### Save the template for this patient
+
+8. Once you are satisfied with the ROI for this patient, click **"Save Template..."** in the **ROI Template I/O** section.
+9. A file dialog opens. The suggested filename is based on the loaded STL name (e.g. `002_reference_roi-mask.json`). Save it inside a convenient location — the same `qc/reference_meshes/` folder works well, or a dedicated `roi/` subfolder next to your study config file.
+10. The software does three things automatically when you click Save:
+    - It writes the ROI template as a JSON file (e.g. `002_reference_roi-mask.json`). This file contains all the ROI settings: the bounding box dimensions, the plane definition, the brush zones, and the tooth segmentation seeds.
+    - It writes an ROI mask STL (e.g. `002_reference_roi-mask_roi_mask.stl`). This STL contains only the triangles of the reference mesh that fall inside the ROI. You can open this file in MeshLab or any STL viewer to verify visually that the correct region is included.
+    - It reads the patient ID from the filename (the digits before the first underscore, e.g. `002` from `002_reference_roi-mask.json`) and records the path to this JSON file in the study configuration file (the `roi_template_file` field for group `002`). This is how the batch run will later find the correct ROI mask for each patient.
+
+> **How to verify the ROI mask STL:** Open the `_roi_mask.stl` file in MeshLab. You should see only the tooth surfaces, without gingiva or scan borders. If soft tissue is still visible, go back into the ROI Template Editor and add more Brush Exclude zones, then save again (the files are overwritten).
+
+---
+
+##### Proceed to the next patient
+
+11. In the ROI Template Editor, click **Browse...** again and load the next patient's reference STL (e.g. `003_reference.stl`). All ROI settings reset to blank automatically when you load a new file. This ensures that the settings from patient 002 do not carry over to patient 003.
+12. Repeat the definition and save steps for this patient.
+13. Continue until all patients have a saved ROI template. You can verify which patients are done by opening the study configuration JSON in a text editor — each completed patient group will have a `"roi_template_file": "path/to/..."` entry.
+
+---
+
+#### Step C — Run the batch with per-patient ROI masks active
+
+1. Go to the **Batch Processing** tab.
+2. Check the **"Use ROI mask for registration (masked ICP)"** checkbox. This must be checked for the per-patient ROI masks to be applied.
+3. Click **Run Batch Processing**.
+
+In the batch log, you will see a message like:
+
+```
+Masked ICP: no global template — using per-group ROI templates (16/16 groups configured)
+```
+
+This confirms that the software found a per-patient ROI template for every group and will apply the correct mask for each patient individually. If the number shown is less than the total number of groups (e.g. `14/16`), it means two patients do not yet have a saved ROI template — go back to Step B and define the missing ones before re-running.
+
+> **Note:** You do not need to select a global ROI template file anywhere. The per-patient templates are linked directly in the study configuration file by the Save Template action you performed in Step B. The global ROI Template field in the Study Configuration tab can be left empty when using per-patient masks.
+
+---
+
+#### Summary checklist for per-patient ROI workflow
+
+| Step | Action | Done when… |
+|------|--------|------------|
+| A | Run batch without ROI | `qc/reference_meshes/` folder contains one `*_reference.stl` per patient |
+| B1 | Load study config | Study Configuration tab shows all groups |
+| B2 | For each patient: Browse → load `<id>_reference.stl` | 3D mesh appears in viewport, all ROI controls reset |
+| B3 | Define ROI (Plane Slab + Brush Exclude recommended) | Green/dark mask in viewport looks correct |
+| B4 | Save Template | JSON and mask STL files written; study config updated |
+| B5 | Repeat B2–B4 for all patients | All patient groups have `roi_template_file` in study JSON |
+| C | Check "Use ROI mask" checkbox and run batch | Log shows `using per-group ROI templates (N/N groups configured)` |
+
+---
+
+**Note on jaw orientation:** In the coordinate system this software uses, Z increases toward the skull. For lower jaw scans, the tooth crowns are at the top (high Z) and the roots point downward (low Z) — the automatic occlusal plane detection works correctly. For upper jaw scans, the geometry is inverted: crowns point downward (low Z) and the palate is at the top (high Z). The automatic Z detection may not work correctly for upper jaw patients. Use the Plane Slab by manually picking three points on the tooth surface, and verify the result visually before saving.
 
 ### Step 4: Run Batch Processing
 

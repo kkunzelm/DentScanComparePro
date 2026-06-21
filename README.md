@@ -8,7 +8,7 @@ Based on the core algorithms from [DentScanCompare](../DentScanCompare/), extend
 - JSON-driven batch configuration with generic group IDs
 - Automated file discovery via glob patterns with scanner ID matching
 - Per-group GPA alignment with incremental save/resume
-- **Per-patient ROI templates**: each patient group carries its own ROI definition (selected interactively in the GUI, saved as JSON + ROI mask STL, auto-linked in the study config)
+- **Per-patient ROI templates**: each patient group carries its own ROI definition (selected interactively in the ROI Template Editor, saved as JSON + ROI mask STL, auto-linked in the study config via patient ID inferred from the STL filename)
 - Quality Control (QC) workflow with visual verification and re-registration
 - CSV output for statistical analysis (R, SPSS, etc.)
 
@@ -76,7 +76,7 @@ serve different use cases:
 ### Integration
 - Load pre-computed transforms from DentScanAlign
 - ROI templates: any active geometric component (bounding box, plane slab, brush zones) is applied to the **reference mesh once** to create a trimmed submesh; all source scans then align to that masked reference via standard ICP. This makes ROI-restricted alignment robust to inter-scanner offsets — source scans use their full geometry during alignment. Tooth segmentation seeds additionally filter metric computation per scan.
-- **Per-patient ROI**: in clinical studies each patient group can carry its own ROI template JSON + mask STL (generated interactively in the ROI Template Editor, linked via `roi_template_file` in the study JSON). GroupProcessor loads the per-group template at runtime, overriding any study-wide template.
+- **Per-patient ROI**: in clinical studies each patient group carries its own ROI template JSON + mask STL. Workflow: (1) run one batch without ROI to generate `qc/reference_meshes/<id>_reference.stl` per patient; (2) in the ROI Template Editor, Browse → load each patient's reference STL, draw the mask (Plane Slab + Brush Exclude recommended), click Save Template — the software infers the patient ID from the filename and records `roi_template_file` in the study JSON automatically; (3) repeat for all patients; (4) enable "Use ROI mask" and run the batch. `GroupProcessor` loads the per-group template at runtime, overriding any study-wide template. When no global template is set but per-group templates exist, the batch log shows: `Masked ICP: no global template — using per-group ROI templates (N/N groups configured)`.
 - External reference support (CAD or lab scanner STL)
 
 ---

@@ -1205,7 +1205,28 @@ Computing pairwise distances...... done (M pairs)
 
 **Motivation:** Patient cohort studies (e.g. P2026-Nold) have one GPA reference mesh per patient. The occlusal plane height varies >5 mm across patients and jaw orientation differs (upper jaw: crowns at low Z; lower jaw: crowns at high Z). A single shared ROI template cannot correctly exclude soft tissue for all patients.
 
-**Architecture:** Each `GroupConfig` now carries an optional `roiTemplatePath`. At runtime, `GroupProcessor::process()` loads the per-group template into a local `resolvedTemplate` variable, overriding the study-wide template. The study-wide template remains the fallback when no per-group path is set. The `forceFullMesh` flag (set when "Use ROI mask" is unchecked) bypasses per-group templates entirely, consistent with its existing behaviour.
+**Architecture:** Each `GroupConfig` now carries an optional `roiTemplatePath`. At runtime, `GroupProcessor::process()` loads the per-group template into a local `resolvedTemplate` variable, overriding the study-wide template. The study-wide template remains the fallback when no per-group path is set. The `forceFullMesh` flag (set when "Use ROI mask" is unchecked) bypasses per-group templates entirely, consistent with existing behaviour.
+
+**Patient ID inference from filename (`saveROITemplate`):**
+The ROI Template Editor no longer has a Patient/Group dropdown. Instead, when the user clicks Save Template, `saveROITemplate()` extracts the patient ID from the loaded STL filename:
+```cpp
+QString stlName = QFileInfo(m_templatePathEdit->text()).baseName(); // e.g. "002_reference"
+QString inferredId = stlName.section('_', 0, 0);                   // "002"
+```
+It then searches `m_studyConfig.groups` for the matching `id` and updates `roiTemplatePath`. This eliminates the need for a manual dropdown selection and prevents mismatches between the displayed patient and the file being saved.
+
+**Batch log when per-group templates are used without a global template:**
+```cpp
+// MainWindow::runBatch() — else branch when roiTemplatePath is empty but useMaskedICP is true
+int nGroupsWithTemplate = 0;
+for (const auto& g : m_studyConfig.groups)
+    if (!g.roiTemplatePath.isEmpty()) ++nGroupsWithTemplate;
+if (nGroupsWithTemplate > 0)
+    m_batchLog->append(QString("Masked ICP: no global template — using per-group ROI templates (%1/%2 groups configured)")
+        .arg(nGroupsWithTemplate).arg(m_studyConfig.groups.size()));
+else
+    m_batchLog->append("Masked ICP: No ROI template specified, using full-mesh ICP");
+```
 
 **Files changed:**
 
@@ -1217,34 +1238,48 @@ Computing pairwise distances...... done (M pairs)
 - `saveToJSON`: writes `roi_template_file` key only when `roiTemplatePath` is non-empty.
 
 `src/qc/QCExporter.h`
-- Moved `writeBinarySTL` from `private:` to `public:` so `MainWindow::saveROITemplate()` can call it to export the ROI mask STL alongside the template JSON.
+- Moved `writeBinarySTL` from `private:` to `public:` so `MainWindow::saveROITemplate()` can export the ROI mask STL alongside the template JSON.
 
 `src/gui/MainWindow.h`
-- Added slot `onGroupSelectorChanged(int index)`.
-- Added member `QComboBox* m_groupSelectorCombo`.
+- Removed `onGroupSelectorChanged(int index)` slot and `QComboBox* m_groupSelectorCombo` member (dropdown removed in favour of filename-based inference).
 
 `src/gui/MainWindow.cpp`
-- Added `#include <QComboBox>`, `#include <unordered_map>`, `#include <limits>`.
-- `setupROITab()`: inserts a "Patient / Group" QGroupBox with a QComboBox above the Bounding Box section. Combo is populated and enabled by `updateStudyOverview()`.
-- `updateStudyOverview()`: populates combo with group IDs; adds `✓` suffix to labels whose `roiTemplatePath` is non-empty.
-- `onGroupSelectorChanged(int index)`: auto-loads the group's reference STL. Priority: `group.representativeScan` → `<study_dir>/qc/reference_meshes/<id>_reference.stl` → `<outputDir>/qc/reference_meshes/<id>_reference.stl`.
-- `saveROITemplate()`: after writing the template JSON, builds an ROI submesh from `m_currentROI.isInROI()` on `m_templateScan`, writes it as a binary STL via `DentScanBatch::QCExporter::writeBinarySTL()`, stores the JSON path in `m_studyConfig.groups[groupIdx].roiTemplatePath`, adds `✓` to the combo label, and saves the study config back to disk.
+- `setupROITab()`: "Patient / Group" QGroupBox and QComboBox removed entirely.
+- `updateStudyOverview()`: group selector population block removed.
+- `saveROITemplate()`: group lookup changed from `m_groupSelectorCombo->currentIndex()` to filename-based inference (section `'_', 0, 0` of loaded STL basename).
+- `runBatch()`: misleading "No ROI template" message replaced with per-group count message (see above).
+- Constructor: added deferred auto-load of study config via `QTimer::singleShot(0, ...)` so the ROI tab is populated from a previously saved path without requiring the user to click "Load Configuration" each startup.
+- `loadTemplateScan()`: added full pick-mode reset block before the ROI data reset: unchecks all four pick buttons with `QSignalBlocker`, calls `setBrushCursorEnabled(false)`, `setPickMode(false)`, `clearPickActors()`, and resets `m_seedPickMode`.
 
 `src/batch/GroupProcessor.cpp`
 - Added `#include <QFile>`.
-- Start of `process()`: declares `std::optional<ROITemplate> resolvedTemplate = roiTemplate`. If `!forceFullMesh && !group.roiTemplatePath.isEmpty()` and the file exists, loads it via `ROITemplate::loadFromFile()` into `resolvedTemplate` with a console message. Missing file emits a warning into `result.warnings`.
+- Start of `process()`: declares `std::optional<ROITemplate> resolvedTemplate = roiTemplate`. If `!forceFullMesh && !group.roiTemplatePath.isEmpty()` and the file exists, loads it via `ROITemplate::loadFromFile()` into `resolvedTemplate`. Missing file emits a warning into `result.warnings`.
 - All four subsequent uses of `roiTemplate` in `process()` replaced with `resolvedTemplate`.
-
-**UX:**
-- Group selector dropdown at top of ROI tab cycles through patients; auto-loads each patient's reference mesh.
-- Save Template writes JSON + mask STL and updates the study JSON in one click.
-- `✓` suffix in dropdown gives immediate visual confirmation that a template is saved for each group.
-- "Use ROI mask for registration" checkbox must be checked for per-group templates to take effect (consistent with existing masked ICP behaviour).
 
 **Z-orientation caveat (documented in user manual):**
 - Canonical Z increases toward skull: upper jaw crowns are at *low* Z, lower jaw crowns at *high* Z.
-- `computeOcclusalZ()` (used by the Plane Slab auto-detect) returns max Z — correct for lower jaw only.
-- For upper jaw patients use Brush Exclude or Tooth Segmentation instead of relying on the Plane Slab.
+- `computeOcclusalZ()` returns max Z — correct for lower jaw only.
+- For upper jaw patients use Brush Exclude or Tooth Segmentation rather than relying on the Plane Slab alone.
+
+### 2026-06-21 (session 2) – ROI Template Editor pick-mode coupling fixes
+
+**Problem:** Multiple pick modes (brush, plane slab, tooth segmentation seeds) shared the VTK pick infrastructure in ways that caused interference:
+1. Brush cursor sphere (scaled by brush radius) remained visible when switching to plane-pick or seed-pick mode — picked points appeared to "hang in the air" at the cursor, not on the mesh, producing wrong plane fits.
+2. Occlusal plane disk actors were pickable — brush and seed clicks landed on the disk surface instead of the mesh underneath.
+3. `loadTemplateScan()` did not deactivate active pick modes before resetting ROI state — second and subsequent browse-load-save cycles inherited the active pick mode from the previous cycle.
+
+**Root cause:** `setBrushCursorEnabled(false)` was only called via the brush button `toggled` signal's `else` branch. That signal does not fire when `setChecked(false)` is called on a button that was already unchecked — so switching from plane-pick (which never checked the brush buttons) to another mode left the cursor enabled.
+
+**Fixes:**
+
+`src/visualization/VTKMeshWidget.cpp`
+- `makeDiskActor()`: added `actor->SetPickable(false)` before returning — all three plane disks (centre, above, below) are now transparent to `vtkCellPicker`.
+- Brush cursor actor already had `SetPickable(false)` in `buildPipeline()`.
+
+`src/gui/MainWindow.cpp`
+- `onSeedPickModeToggled(bool active)`: added `m_roiMeshWidget->setBrushCursorEnabled(false)` at the top of the `if (active)` block.
+- `onOcclusPlanePickModeToggled(bool active)`: same addition — explicit disable regardless of button state.
+- `loadTemplateScan()`: before the ROI data reset, added a block that unchecks all four pick buttons under `QSignalBlocker` (to avoid cascading signals), then calls `setBrushCursorEnabled(false)`, `setPickMode(false)`, `clearPickActors()`, and resets `m_seedPickMode = false` and `m_occlusPlanePickMode = false`.
 
 ### 2026-06-03 – Landmark Registration Debugging (Part 5)
 
