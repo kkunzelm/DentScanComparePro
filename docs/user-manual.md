@@ -92,7 +92,7 @@ The ROI template defines which region of the scan to analyze. This is especially
 
 The ROI (Region of Interest) is split into two parts that work differently:
 
-**Geometric ROI (bounding box, plane slab, brush override zones) — applied to the REFERENCE:**
+**Geometric ROI (bounding box, plane slab, brush override zones) — applied to the REFERENCE and to aligned source scans:**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -103,14 +103,12 @@ The ROI (Region of Interest) is split into two parts that work differently:
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              ▼ applied ONCE to the reference mesh
-┌─────────────────────────────────────────────────────────────────┐
-│  ROI-MASKED REFERENCE (saved as <group>_roi.stl in qc/)         │
-│  A trimmed submesh containing only faces inside the ROI region. │
-│  Source scans (full mesh) align to this trimmed reference via   │
-│  standard ICP — no source-side coordinate masking needed.       │
-│  Source vertices >5 mm from the ROI are excluded from metrics.  │
-└─────────────────────────────────────────────────────────────────┘
+                  ┌───────────┴────────────┐
+                  ▼                        ▼
+   Applied ONCE to the              Applied to each source
+   reference mesh                   scan AFTER ICP alignment
+   → ROI-masked reference           → source-side vertex mask
+   (saved as <group>_roi.stl)
 ```
 
 **Tooth segmentation (Base Selection) — applied per source scan:**
@@ -124,7 +122,21 @@ The ROI (Region of Interest) is split into two parts that work differently:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why the split?** The geometric ROI coordinates (bounding box corners, plane origin) are defined in the canonical reference frame. Applying them to the reference once is always correct. Applying the same absolute coordinates to each source scan used to fail whenever a scanner had a different coordinate system origin, causing the box or plane to miss most of the scan's vertices and ICP to diverge. The new approach is robust: source scans use their full geometry during alignment, and ICP naturally focuses on the reference ROI region because that is all the reference offers.
+#### How distances and metrics are computed
+
+Distances are computed for **every vertex of the full scan surface** — not only the ROI region. Each scan vertex receives its distance to the nearest point on the ROI-masked reference surface. This means a gingival vertex gets a distance too: it will be the distance from that vertex to the nearest point on the crown boundary of the masked reference.
+
+During metric computation, three filters are applied in sequence. A vertex must pass **all three** to contribute to RMS, MAD, Hausdorff, and the other numbers in the CSV:
+
+| Filter | What it does | Why it is needed |
+|--------|-------------|-----------------|
+| **1. Source-side geometric ROI** | The bounding box, plane slab, and brush zones from the ROI template are re-applied directly to the aligned scan vertex positions. Vertices outside the ROI are excluded. | Catches gingival vertices that are geometrically outside the defined region, even when their distance to the reference boundary happens to be small (1–3 mm). This is the primary filter for soft tissue exclusion. |
+| **2. Distance guard (5 mm)** | Any vertex whose absolute distance to the masked reference exceeds 5 mm is excluded. | Belt-and-suspenders check for vertices that somehow passed filter 1 but are clearly far from the analysis region. |
+| **3. Tooth segmentation mask** | If tooth seeds were placed and segmentation was run, only vertices identified as crown surfaces pass. | Fine-grained exclusion of inter-proximal and cervical soft tissue that the geometric ROI did not cleanly cut off. |
+
+**What the difference PLY files show:** The PLY files written to `qc/difference_meshes/` contain the full scan geometry. Vertices inside the ROI are coloured by their signed distance value (blue = scan surface is recessed, red = scan is proud, white = on-reference). Vertices outside the ROI are shown in white/neutral (distance zeroed before writing) so they do not appear as coloured outliers. Open these files in MeshLab (*Render → Color → Per-Vertex Quality*) to inspect the spatial distribution of trueness errors within the analysis region.
+
+**Why the split between reference-side and source-side masking?** The geometric ROI coordinates (bounding box corners, plane origin) are defined in the reference coordinate frame. Applying them to the reference once is always correct. Applying the same coordinates to a source scan that has not yet been aligned would fail if the scanner uses a different origin — the box would miss the scan entirely. After ICP alignment, the source scan is in the reference coordinate frame, so the ROI coordinates apply correctly to its vertices. The software therefore applies the ROI to the reference first (for ICP alignment focus) and re-applies it to each source scan after alignment (for metric filtering).
 
 **Key Concepts:**
 
@@ -983,7 +995,7 @@ The batch processor executes these stages for each SKD group:
    - **TrICP** (`icp_trim_fraction < 1.0`): each ICP iteration discards the worst-residual fraction of correspondences before the rigid solve. Keeps stable surfaces (teeth) dominant; suppresses influence of deforming soft tissue.
    - **ICP hierarchy** (`use_icp_hierarchy`): coarse-to-fine ICP at 5%/20%/100% face decimation. Each coarse level runs to convergence and seeds the next finer level — avoids local minima from large initial offsets.
 6. **Compute distances** - CGAL AABB-tree signed distances to the ROI-masked (or full) reference
-7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness. Source vertices more than 5 mm from the masked reference are excluded when a geometric ROI is active.
+7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness. Three filters applied in sequence: (1) source-side geometric ROI mask re-applied to the aligned scan vertex positions — primary soft-tissue exclusion; (2) distance guard: vertices more than 5 mm from the masked reference excluded; (3) tooth segmentation mask, if active. Only vertices passing all three filters contribute to the CSV numbers.
 8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
 9. **Export QC data** - GPA means, ROI reference, aligned STLs, difference PLYs, transforms, segmented meshes
 
