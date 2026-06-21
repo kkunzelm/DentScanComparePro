@@ -593,6 +593,10 @@ void MainWindow::setupROITab()
             } else {
                 m_statusLabel->setText("Brush: INCLUDE zone - green (click on mesh)");
             }
+        } else {
+            // Button unchecked: deactivate brush cursor and pick mode
+            m_roiMeshWidget->setBrushCursorEnabled(false);
+            m_roiMeshWidget->setPickMode(false);
         }
     });
     connect(m_brushExcludeBtn, &QPushButton::toggled, this, [this](bool checked) {
@@ -617,6 +621,10 @@ void MainWindow::setupROITab()
             } else {
                 m_statusLabel->setText("Brush: EXCLUDE zone - red (click on mesh)");
             }
+        } else {
+            // Button unchecked: deactivate brush cursor and pick mode
+            m_roiMeshWidget->setBrushCursorEnabled(false);
+            m_roiMeshWidget->setPickMode(false);
         }
     });
 
