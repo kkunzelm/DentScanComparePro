@@ -177,6 +177,7 @@ void VTKMeshWidget::buildPipeline()
                                      m_brushCursorRadius,
                                      m_brushCursorRadius);
         m_brushCursorActor->VisibilityOff();
+        m_brushCursorActor->SetPickable(false);  // never let the picker hit the cursor itself
         m_renderer->AddActor(m_brushCursorActor);
     }
 
@@ -456,12 +457,21 @@ void VTKMeshWidget::setPickMode(bool active)
     }
 }
 
+void VTKMeshWidget::setBrushCursorEnabled(bool enabled)
+{
+    m_brushCursorEnabled = enabled;
+    if (!enabled && m_brushCursorActor) {
+        m_brushCursorActor->VisibilityOff();
+        m_renderWindow->Render();
+    }
+}
+
 void VTKMeshWidget::setBrushCursorRadius(double radiusMm)
 {
     m_brushCursorRadius = radiusMm;
     if (m_brushCursorActor) {
         m_brushCursorActor->SetScale(radiusMm, radiusMm, radiusMm);
-        if (m_pickMode)
+        if (m_pickMode && m_brushCursorEnabled)
             m_renderWindow->Render();
     }
 }
@@ -469,8 +479,8 @@ void VTKMeshWidget::setBrushCursorRadius(double radiusMm)
 bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (m_pickMode && obj == m_vtkWidget) {
-        // Track mouse position to drive the brush cursor sphere
-        if (event->type() == QEvent::MouseMove) {
+        // Track mouse position to drive the brush cursor sphere (brush mode only)
+        if (event->type() == QEvent::MouseMove && m_brushCursorEnabled) {
             auto* me = static_cast<QMouseEvent*>(event);
             const qreal dpr = m_vtkWidget->devicePixelRatioF();
             const int x = static_cast<int>(me->pos().x() * dpr);
@@ -484,7 +494,6 @@ bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
                 m_brushCursorActor->VisibilityOff();
             }
             m_renderWindow->Render();
-            // Pass through so VTK can update its internal state (e.g. rubber-band)
             return false;
         }
         if (event->type() == QEvent::MouseButtonPress) {
@@ -553,7 +562,7 @@ void VTKMeshWidget::showPickSpheres(const std::vector<std::array<double,3>>& pts
         // Create sphere
         auto sphere = vtkSmartPointer<vtkSphereSource>::New();
         sphere->SetCenter(pt[0], pt[1], pt[2]);
-        sphere->SetRadius(0.6);
+        sphere->SetRadius(0.5);
         sphere->SetPhiResolution(12);
         sphere->SetThetaResolution(12);
 

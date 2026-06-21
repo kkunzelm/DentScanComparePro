@@ -123,6 +123,9 @@ public:
     void hideReferenceOverlay();
 
     // ── Brush cursor ──────────────────────────────────────────────────────────
+    // Enable/disable the brush cursor sphere. Must be true for it to appear on
+    // mouse-hover; keeps it hidden during plane-pick and seed-pick modes.
+    void setBrushCursorEnabled(bool enabled);
     // Set the radius of the wireframe sphere that follows the mouse in pick mode.
     void setBrushCursorRadius(double radiusMm);
 
@@ -160,6 +163,7 @@ private:
     vtkSmartPointer<vtkActor>              m_brushCursorActor;  // wireframe sphere following mouse in pick mode
     vtkSmartPointer<vtkCellPicker>         m_brushPicker;       // reused picker for cursor tracking
     double                                 m_brushCursorRadius = 3.0;
+    bool                                   m_brushCursorEnabled = false; // only true in brush mode
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;

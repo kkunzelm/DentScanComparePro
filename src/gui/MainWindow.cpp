@@ -1202,6 +1202,7 @@ void MainWindow::onZPlaneChanged()
 void MainWindow::onBrushModeToggled(bool active)
 {
     m_roiMeshWidget->setPickMode(active);
+    m_roiMeshWidget->setBrushCursorEnabled(active);
     if (!active) {
         m_brushIncludeBtn->setChecked(false);
         m_brushExcludeBtn->setChecked(false);
