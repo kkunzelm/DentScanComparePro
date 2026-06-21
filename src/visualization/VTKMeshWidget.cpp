@@ -642,6 +642,7 @@ vtkSmartPointer<vtkActor> VTKMeshWidget::makeDiskActor(
     actor->GetProperty()->SetOpacity(opacity);
     actor->GetProperty()->LightingOff();
     actor->GetProperty()->SetRepresentationToSurface();
+    actor->SetPickable(false);
     return actor;
 }
 
