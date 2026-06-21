@@ -1045,6 +1045,19 @@ void MainWindow::loadTemplateScan()
         return;
     }
 
+    // Deactivate all pick modes before resetting state
+    {
+        QSignalBlocker b6(m_pickOcclusPlaneBtn), b7(m_seedPickBtn),
+                       b8(m_brushIncludeBtn),    b9(m_brushExcludeBtn);
+        m_pickOcclusPlaneBtn->setChecked(false);
+        m_seedPickBtn->setChecked(false);
+        m_brushIncludeBtn->setChecked(false);
+        m_brushExcludeBtn->setChecked(false);
+    }
+    m_roiMeshWidget->setBrushCursorEnabled(false);
+    m_roiMeshWidget->setPickMode(false);
+    m_roiMeshWidget->clearPickActors();
+
     // Reset all ROI state to defaults when a new reference file is loaded
     {
         QSignalBlocker b1(m_bboxActiveChk), b2(m_zPlaneActiveChk),
@@ -1059,6 +1072,7 @@ void MainWindow::loadTemplateScan()
     }
     m_occlusPlaneValid = false;
     m_occlusPlanePickMode = false;
+    m_seedPickMode = false;
     m_occlusPlanePoints.clear();
     m_occlusPlaneNormal = Eigen::Vector3d(0, 0, 1);
     m_occlusPlaneOrigin = Eigen::Vector3d(0, 0, 0);
@@ -1826,6 +1840,7 @@ void MainWindow::onSeedPickModeToggled(bool active)
 
     // Disable brush mode when seed pick mode is active
     if (active) {
+        m_roiMeshWidget->setBrushCursorEnabled(false);
         m_brushIncludeBtn->setChecked(false);
         m_brushExcludeBtn->setChecked(false);
     }
@@ -1958,6 +1973,7 @@ void MainWindow::onOcclusPlanePickModeToggled(bool active)
 
     // Disable other pick modes
     if (active) {
+        m_roiMeshWidget->setBrushCursorEnabled(false);
         m_seedPickBtn->setChecked(false);
         m_brushIncludeBtn->setChecked(false);
         m_brushExcludeBtn->setChecked(false);
