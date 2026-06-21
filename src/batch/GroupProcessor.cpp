@@ -373,8 +373,26 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 8 (optional): Export QC data
+    // Stage 8 (optional): Export QC data.
+    // Before writing the difference PLY files, zero out distanceToRef for vertices
+    // outside the geometric ROI so they appear neutral (white) in MeshLab instead
+    // of showing as coloured outliers. Metrics are already computed above so this
+    // modification does not affect any numerical results.
     if (!outputDir.isEmpty()) {
+        if (useROIRef) {
+            for (auto& scan : scans) {
+                double z_occ = computeOcclusalZ(scan->mesh);
+                std::size_t idx = 0;
+                for (auto v : scan->mesh.vertices()) {
+                    const auto& p = scan->mesh.point(v);
+                    if (!effectiveROI.isInROI(p.x(), p.y(), p.z(), z_occ)) {
+                        if (idx < scan->distanceToRef.size())
+                            scan->distanceToRef[idx] = 0.0;
+                    }
+                    ++idx;
+                }
+            }
+        }
         exportQCData(result, scans, files, outputDir, toothMasks);
     }
 
@@ -694,14 +712,26 @@ void GroupProcessor::computeTruenessMetrics(
         ArchMetrics::computeStitchingArtifacts(*scan, report);
 
         // Collect distances.
-        // The reference mesh is already ROI-masked, so distances to it are small
-        // for source vertices in the ROI region and large for those outside.
-        // Filter: |d| <= maxMetricDist  AND  tooth mask (if active).
-        // This replaces the old source-side geometric ROI mask which failed when
-        // source scans were not exactly in the template coordinate frame.
+        // Three-layer filter (all must pass):
+        // 1. |d| <= maxMetricDist  — coarse guard: excludes vertices >5 mm from the
+        //    masked reference; catches obvious soft-tissue regions far from the crown.
+        // 2. Source-side geometric ROI mask (bbox / z-plane / brush zones) computed
+        //    from the ALIGNED scan vertex positions. After ICP, the scan is in the
+        //    reference coordinate frame, so the ROI coordinates apply correctly.
+        //    This catches gingival vertices that are close (<5 mm) to the crown
+        //    boundary and would otherwise slip through filter 1.
+        // 3. Tooth segmentation mask (if active).
         const std::vector<bool>* toothMask =
             (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty())
             ? &toothMasks[scanIdx] : nullptr;
+
+        // Build source-side geometric ROI mask (layer 2) when any component is active
+        bool hasGeomROI = roi.bbox.active || roi.zPlane.active || !roi.brushZones.empty();
+        std::vector<bool> geoMask;
+        if (hasGeomROI) {
+            double z_occ = computeOcclusalZ(scan->mesh);
+            geoMask = computeROIMask(*scan, roi, z_occ);
+        }
 
         std::vector<double> distances;
         std::vector<double> absDistances;
@@ -710,6 +740,7 @@ void GroupProcessor::computeTruenessMetrics(
             double d    = scan->distanceToRef[i];
             double absD = std::abs(d);
             if (absD > maxMetricDist) continue;
+            if (!geoMask.empty() && i < geoMask.size() && !geoMask[i]) continue;
             if (toothMask && i < toothMask->size() && !(*toothMask)[i]) continue;
             distances.push_back(d);
             absDistances.push_back(absD);
