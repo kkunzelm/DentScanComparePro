@@ -469,7 +469,6 @@ void VTKMeshWidget::setBrushCursorRadius(double radiusMm)
 bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (m_pickMode && obj == m_vtkWidget) {
-        // Track mouse position to drive the brush cursor sphere
         if (event->type() == QEvent::MouseMove) {
             auto* me = static_cast<QMouseEvent*>(event);
             const qreal dpr = m_vtkWidget->devicePixelRatioF();
@@ -478,31 +477,49 @@ bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
             if (m_brushPicker->Pick(x, y, 0, m_renderer)) {
                 double pos[3];
                 m_brushPicker->GetPickPosition(pos);
+
+                // Update cursor sphere
                 m_brushCursorActor->SetPosition(pos[0], pos[1], pos[2]);
                 m_brushCursorActor->VisibilityOn();
+
+                // Sweep paint: emit pointPicked while left button held, but only
+                // after the cursor has moved at least half a brush radius from the
+                // previous emission so strokes don't stack hundreds of identical zones.
+                if (m_brushButtonDown) {
+                    double dx = pos[0] - m_lastBrushEmitPos[0];
+                    double dy = pos[1] - m_lastBrushEmitPos[1];
+                    double dz = pos[2] - m_lastBrushEmitPos[2];
+                    double step = m_brushCursorRadius * 0.5;
+                    if (!m_brushEmittedDuringDrag ||
+                        dx*dx + dy*dy + dz*dz >= step * step) {
+                        m_lastBrushEmitPos = {pos[0], pos[1], pos[2]};
+                        m_brushEmittedDuringDrag = true;
+                        emit pointPicked(pos[0], pos[1], pos[2]);
+                    }
+                }
             } else {
                 m_brushCursorActor->VisibilityOff();
             }
             m_renderWindow->Render();
-            // Pass through so VTK can update its internal state (e.g. rubber-band)
             return false;
         }
         if (event->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {
                 m_pressPos = me->pos();
-                // Pass through to VTK so drag-to-rotate still works.
+                m_brushButtonDown = true;
+                m_brushEmittedDuringDrag = false;
                 return false;
             }
         }
         if (event->type() == QEvent::MouseButtonRelease) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {
-                // Only treat as a pick if the mouse barely moved (click, not drag).
-                if ((me->pos() - m_pressPos).manhattanLength() < 6) {
-                    // Convert from Qt logical pixels to VTK device pixels.
-                    // On high-DPI displays, me->pos() returns logical coords but
-                    // vtkCellPicker::Pick() expects device (physical) pixels.
+                m_brushButtonDown = false;
+                // Pure click (barely moved, nothing swept yet): emit at release position.
+                // If we already swept, skip to avoid double-painting the endpoint.
+                if (!m_brushEmittedDuringDrag &&
+                    (me->pos() - m_pressPos).manhattanLength() < 6) {
                     const qreal dpr = m_vtkWidget->devicePixelRatioF();
                     const int x = static_cast<int>(me->pos().x() * dpr);
                     const int y = static_cast<int>((m_vtkWidget->height() - me->pos().y() - 1) * dpr);
