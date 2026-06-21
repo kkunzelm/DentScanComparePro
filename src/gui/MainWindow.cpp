@@ -1733,7 +1733,16 @@ void MainWindow::runBatch()
                 .arg(e.what()));
         }
     } else if (useMaskedICP) {
-        m_batchLog->append("Masked ICP: No ROI template specified, using full-mesh ICP");
+        // Check whether per-group templates are defined in the study config
+        int nGroupsWithTemplate = 0;
+        for (const auto& g : m_studyConfig.groups)
+            if (!g.roiTemplatePath.isEmpty()) ++nGroupsWithTemplate;
+        if (nGroupsWithTemplate > 0) {
+            m_batchLog->append(QString("Masked ICP: no global template — using per-group ROI templates (%1/%2 groups configured)")
+                .arg(nGroupsWithTemplate).arg(m_studyConfig.groups.size()));
+        } else {
+            m_batchLog->append("Masked ICP: No ROI template specified, using full-mesh ICP");
+        }
     }
 
     // Create batch runner
