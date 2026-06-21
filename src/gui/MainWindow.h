@@ -63,7 +63,6 @@ private slots:
     void onPointPicked(double x, double y, double z);
     void saveROITemplate();
     void loadROITemplate();
-    void onGroupSelectorChanged(int index);
 
     // Tooth Segmentation
     void onSeedPickModeToggled(bool active);
@@ -175,7 +174,6 @@ private:
     QWidget* m_roiTab = nullptr;
     VTKMeshWidget* m_roiMeshWidget = nullptr;
     QLineEdit* m_templatePathEdit = nullptr;
-    class QComboBox* m_groupSelectorCombo = nullptr;
 
     // Bounding box controls
     class QDoubleSpinBox* m_bboxMinX = nullptr;

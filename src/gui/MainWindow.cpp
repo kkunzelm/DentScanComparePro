@@ -421,19 +421,6 @@ void MainWindow::setupROITab()
     auto* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setSpacing(8);
 
-    // Per-group selector
-    auto* groupSelGroup = new QGroupBox("Patient / Group");
-    auto* groupSelLayout = new QHBoxLayout(groupSelGroup);
-    m_groupSelectorCombo = new QComboBox();
-    m_groupSelectorCombo->setToolTip(
-        "Select a patient group to edit its individual ROI template.\n"
-        "Saving the template will update the study config automatically.");
-    m_groupSelectorCombo->addItem("(no study loaded)");
-    m_groupSelectorCombo->setEnabled(false);
-    connect(m_groupSelectorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onGroupSelectorChanged);
-    groupSelLayout->addWidget(m_groupSelectorCombo);
-    rightLayout->addWidget(groupSelGroup);
 
     // Bounding Box group
     auto* bboxGroup = new QGroupBox("Bounding Box");
@@ -1026,21 +1013,6 @@ void MainWindow::updateStudyOverview()
     }
 
     m_studyTree->resizeColumnToContents(0);
-
-    // Populate group selector in ROI tab
-    {
-        QSignalBlocker blocker(m_groupSelectorCombo);
-        m_groupSelectorCombo->clear();
-        for (const auto& group : m_studyConfig.groups) {
-            QString label = group.id;
-            if (!group.roiTemplatePath.isEmpty())
-                label += " ✓";
-            m_groupSelectorCombo->addItem(label, group.id);
-        }
-        m_groupSelectorCombo->setEnabled(!m_studyConfig.groups.empty());
-        if (!m_studyConfig.groups.empty())
-            m_groupSelectorCombo->setCurrentIndex(0);
-    }
 }
 
 void MainWindow::browseTemplateScan()
@@ -1129,59 +1101,6 @@ void MainWindow::loadTemplateScan()
     m_statusLabel->setText("Template scan loaded: " + path);
 }
 
-void MainWindow::onGroupSelectorChanged(int index)
-{
-    if (!m_configLoaded || index < 0 || index >= static_cast<int>(m_studyConfig.groups.size()))
-        return;
-
-    const auto& group = m_studyConfig.groups[index];
-
-    // If the group already has a saved ROI template, load it
-    if (!group.roiTemplatePath.isEmpty() && QFile::exists(group.roiTemplatePath)) {
-        m_templatePathEdit->clear();
-        // Load template (reuses existing loadROITemplate logic via direct file path)
-        QFile file(group.roiTemplatePath);
-        if (file.open(QIODevice::ReadOnly)) {
-            QJsonParseError parseError;
-            QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
-            if (parseError.error == QJsonParseError::NoError) {
-                // Trigger the full load path by temporarily setting last-used path
-                QSettings settings("DentScanComparePro", "DentScanComparePro");
-                settings.setValue("paths/lastROIEditorTemplate", group.roiTemplatePath);
-            }
-        }
-    }
-
-    // Auto-load the reference STL for this group if we can find it.
-    // Priority: group.representativeScan → QC reference mesh next to the study file.
-    QString stlToLoad;
-    if (!group.representativeScan.isEmpty() && QFile::exists(group.representativeScan)) {
-        stlToLoad = group.representativeScan;
-    } else {
-        // Derive from study file location: <study_dir>/qc/reference_meshes/<id>_reference.stl
-        QFileInfo studyFi(m_studyPathEdit->text());
-        QString candidate = studyFi.dir().absoluteFilePath(
-            QString("qc/reference_meshes/%1_reference.stl").arg(group.id));
-        // Also try the output dir configured in the batch tab
-        QString outputCandidate;
-        if (!m_outputDirEdit->text().isEmpty()) {
-            outputCandidate = QDir(m_outputDirEdit->text()).absoluteFilePath(
-                QString("qc/reference_meshes/%1_reference.stl").arg(group.id));
-        }
-        if (QFile::exists(candidate))
-            stlToLoad = candidate;
-        else if (!outputCandidate.isEmpty() && QFile::exists(outputCandidate))
-            stlToLoad = outputCandidate;
-    }
-
-    if (!stlToLoad.isEmpty()) {
-        m_templatePathEdit->setText(stlToLoad);
-        loadTemplateScan();
-        m_statusLabel->setText(QString("Group %1: loaded reference STL").arg(group.id));
-    } else {
-        m_statusLabel->setText(QString("Group %1 selected — browse or load a reference STL").arg(group.id));
-    }
-}
 
 void MainWindow::onBBoxChanged()
 {
@@ -1443,15 +1362,18 @@ void MainWindow::saveROITemplate()
         }
     }
 
-    // Update per-group ROI template path in the loaded study config
-    int groupIdx = m_groupSelectorCombo->currentIndex();
+    // Update per-group ROI template path in the loaded study config.
+    // Infer patient ID from the loaded STL filename (e.g. "002_reference.stl" → "002").
     bool studyJsonUpdated = false;
-    if (m_configLoaded && groupIdx >= 0 && groupIdx < static_cast<int>(m_studyConfig.groups.size())) {
-        m_studyConfig.groups[groupIdx].roiTemplatePath = path;
-
-        // Refresh the combo label to show the ✓ indicator
-        QString label = m_studyConfig.groups[groupIdx].id + " ✓";
-        m_groupSelectorCombo->setItemText(groupIdx, label);
+    if (m_configLoaded) {
+        QString stlName = QFileInfo(m_templatePathEdit->text()).baseName(); // e.g. "002_reference"
+        QString inferredId = stlName.section('_', 0, 0);                   // first token before '_'
+        int groupIdx = -1;
+        for (int i = 0; i < static_cast<int>(m_studyConfig.groups.size()); ++i) {
+            if (m_studyConfig.groups[i].id == inferredId) { groupIdx = i; break; }
+        }
+        if (groupIdx >= 0)
+            m_studyConfig.groups[groupIdx].roiTemplatePath = path;
 
         // Write updated study config back to disk
         QString studyPath = m_studyPathEdit->text();
