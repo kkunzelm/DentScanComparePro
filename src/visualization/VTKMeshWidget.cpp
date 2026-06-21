@@ -156,6 +156,34 @@ void VTKMeshWidget::buildPipeline()
     // to avoid issues with interactor not being ready
     m_orientationWidget = nullptr;
 
+    // Brush cursor: a wireframe sphere that follows the mouse while in pick mode
+    {
+        auto sphere = vtkSmartPointer<vtkSphereSource>::New();
+        sphere->SetCenter(0, 0, 0);
+        sphere->SetRadius(1.0);       // scaled via actor transform; setBrushCursorRadius drives scale
+        sphere->SetPhiResolution(20);
+        sphere->SetThetaResolution(20);
+
+        auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+        mapper->SetInputConnection(sphere->GetOutputPort());
+
+        m_brushCursorActor = vtkSmartPointer<vtkActor>::New();
+        m_brushCursorActor->SetMapper(mapper);
+        m_brushCursorActor->GetProperty()->SetRepresentationToWireframe();
+        m_brushCursorActor->GetProperty()->SetColor(1.0, 1.0, 0.0);   // yellow
+        m_brushCursorActor->GetProperty()->SetLineWidth(1.5);
+        m_brushCursorActor->GetProperty()->SetOpacity(0.9);
+        m_brushCursorActor->SetScale(m_brushCursorRadius,
+                                     m_brushCursorRadius,
+                                     m_brushCursorRadius);
+        m_brushCursorActor->VisibilityOff();
+        m_renderer->AddActor(m_brushCursorActor);
+    }
+
+    // Reusable picker for brush cursor hover tracking (avoids per-event allocation)
+    m_brushPicker = vtkSmartPointer<vtkCellPicker>::New();
+    m_brushPicker->SetTolerance(0.001);
+
     // event filter intercepts mouse events for pick mode
     m_vtkWidget->installEventFilter(this);
 }
@@ -417,16 +445,48 @@ void VTKMeshWidget::setOverlayMeshes(
 void VTKMeshWidget::setPickMode(bool active)
 {
     m_pickMode = active;
-    // Change cursor so the user gets visual feedback
-    if (active)
+    if (active) {
         m_vtkWidget->setCursor(Qt::CrossCursor);
-    else
+    } else {
         m_vtkWidget->unsetCursor();
+        if (m_brushCursorActor) {
+            m_brushCursorActor->VisibilityOff();
+            m_renderWindow->Render();
+        }
+    }
+}
+
+void VTKMeshWidget::setBrushCursorRadius(double radiusMm)
+{
+    m_brushCursorRadius = radiusMm;
+    if (m_brushCursorActor) {
+        m_brushCursorActor->SetScale(radiusMm, radiusMm, radiusMm);
+        if (m_pickMode)
+            m_renderWindow->Render();
+    }
 }
 
 bool VTKMeshWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (m_pickMode && obj == m_vtkWidget) {
+        // Track mouse position to drive the brush cursor sphere
+        if (event->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            const qreal dpr = m_vtkWidget->devicePixelRatioF();
+            const int x = static_cast<int>(me->pos().x() * dpr);
+            const int y = static_cast<int>((m_vtkWidget->height() - me->pos().y() - 1) * dpr);
+            if (m_brushPicker->Pick(x, y, 0, m_renderer)) {
+                double pos[3];
+                m_brushPicker->GetPickPosition(pos);
+                m_brushCursorActor->SetPosition(pos[0], pos[1], pos[2]);
+                m_brushCursorActor->VisibilityOn();
+            } else {
+                m_brushCursorActor->VisibilityOff();
+            }
+            m_renderWindow->Render();
+            // Pass through so VTK can update its internal state (e.g. rubber-band)
+            return false;
+        }
         if (event->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {

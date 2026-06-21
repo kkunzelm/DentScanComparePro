@@ -17,6 +17,7 @@
 #include <vtkProp3D.h>
 #include <vtkOrientationMarkerWidget.h>
 #include <vtkGenericOpenGLRenderWindow.h>
+#include <vtkCellPicker.h>
 #include <Eigen/Core>
 #include <QPoint>
 #include <array>
@@ -121,6 +122,10 @@ public:
     // Hide the reference wireframe overlay (keeps the scan visible).
     void hideReferenceOverlay();
 
+    // ── Brush cursor ──────────────────────────────────────────────────────────
+    // Set the radius of the wireframe sphere that follows the mouse in pick mode.
+    void setBrushCursorRadius(double radiusMm);
+
 signals:
     // Emitted when the user left-clicks a surface in pick mode.
     void pointPicked(double x, double y, double z);
@@ -152,6 +157,9 @@ private:
     std::vector<vtkSmartPointer<vtkProp3D>> m_textActors;  // numbered labels for spheres
     vtkSmartPointer<vtkActor>              m_bboxActor;    // wireframe bounding box
     vtkSmartPointer<vtkActor>              m_referenceWireframeActor; // reference mesh wireframe
+    vtkSmartPointer<vtkActor>              m_brushCursorActor;  // wireframe sphere following mouse in pick mode
+    vtkSmartPointer<vtkCellPicker>         m_brushPicker;       // reused picker for cursor tracking
+    double                                 m_brushCursorRadius = 3.0;
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;

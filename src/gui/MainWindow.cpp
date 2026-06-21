@@ -628,6 +628,8 @@ void MainWindow::setupROITab()
     m_brushRadiusSpin->setSuffix(" mm");
     brushRadiusLayout->addRow("Radius:", m_brushRadiusSpin);
     brushLayout->addLayout(brushRadiusLayout);
+    connect(m_brushRadiusSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            m_roiMeshWidget, &VTKMeshWidget::setBrushCursorRadius);
 
     m_clearBrushBtn = new QPushButton("Clear Manual Overrides");
     m_clearBrushBtn->setToolTip(
