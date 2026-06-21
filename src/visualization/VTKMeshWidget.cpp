@@ -862,8 +862,8 @@ void VTKMeshWidget::setOcclusalView()
     camera->SetPosition(centerX, centerY, centerZ + maxSize * 2);
     camera->SetFocalPoint(centerX, centerY, centerZ);
     camera->SetViewUp(0, 1, 0);
-    camera->SetParallelProjection(true);
-    camera->SetParallelScale(maxSize * 0.6);
+    camera->SetParallelProjection(false);
+    camera->SetViewAngle(30.0);
 
     m_renderWindow->Render();
 }

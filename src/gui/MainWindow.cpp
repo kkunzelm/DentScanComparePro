@@ -56,7 +56,24 @@ MainWindow::MainWindow(QWidget* parent)
     setupMenuBar();
     loadSettings();
 
-    m_statusLabel->setText("Ready. Load a study configuration to begin.");
+    // Auto-load study config if path was previously saved (so group selector is populated
+    // immediately and saveROITemplate() can update the JSON without requiring a manual click)
+    QTimer::singleShot(0, this, [this]() {
+        QString studyPath = m_studyPathEdit->text();
+        if (!studyPath.isEmpty() && QFile::exists(studyPath)) {
+            try {
+                m_studyConfig = DentScanBatch::StudyConfig::loadFromFile(studyPath);
+                m_configLoaded = true;
+                updateStudyOverview();
+                m_runBatchBtn->setEnabled(true);
+                m_statusLabel->setText("Configuration loaded: " + m_studyConfig.name);
+            } catch (...) {
+                m_statusLabel->setText("Ready. Load a study configuration to begin.");
+            }
+        } else {
+            m_statusLabel->setText("Ready. Load a study configuration to begin.");
+        }
+    });
 }
 
 MainWindow::~MainWindow()
@@ -1417,6 +1434,7 @@ void MainWindow::saveROITemplate()
 
     // Update per-group ROI template path in the loaded study config
     int groupIdx = m_groupSelectorCombo->currentIndex();
+    bool studyJsonUpdated = false;
     if (m_configLoaded && groupIdx >= 0 && groupIdx < static_cast<int>(m_studyConfig.groups.size())) {
         m_studyConfig.groups[groupIdx].roiTemplatePath = path;
 
@@ -1429,6 +1447,7 @@ void MainWindow::saveROITemplate()
         if (!studyPath.isEmpty()) {
             try {
                 m_studyConfig.saveToFile(studyPath);
+                studyJsonUpdated = true;
             } catch (const std::exception& e) {
                 QMessageBox::warning(this, "Config Save Warning",
                     QString("ROI template saved but could not update study config:\n%1").arg(e.what()));
@@ -1438,6 +1457,17 @@ void MainWindow::saveROITemplate()
 
     QString msg = QString("ROI template saved: %1").arg(path);
     if (stlOk) msg += QString("\nROI mask STL: %1").arg(stlPath);
+    if (studyJsonUpdated) {
+        msg += QString("\nStudy config updated: %1").arg(m_studyPathEdit->text());
+    } else {
+        msg += "\nWARNING: Study config NOT updated — load the study config first.";
+        QMessageBox::warning(this, "Study Config Not Updated",
+            "The ROI template was saved, but the study configuration JSON was not updated.\n\n"
+            "To register this template in the study:\n"
+            "1. Load the study config (.json) using 'Load Config'\n"
+            "2. Select the patient group in the ROI tab\n"
+            "3. Save the ROI template again.");
+    }
     m_statusLabel->setText(msg);
 }
 
