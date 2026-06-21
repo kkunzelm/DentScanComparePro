@@ -160,9 +160,6 @@ private:
     vtkSmartPointer<vtkActor>              m_brushCursorActor;  // wireframe sphere following mouse in pick mode
     vtkSmartPointer<vtkCellPicker>         m_brushPicker;       // reused picker for cursor tracking
     double                                 m_brushCursorRadius = 3.0;
-    bool                                   m_brushButtonDown = false;
-    bool                                   m_brushEmittedDuringDrag = false;
-    std::array<double, 3>                  m_lastBrushEmitPos = {0.0, 0.0, 0.0};
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>       m_renderer;
