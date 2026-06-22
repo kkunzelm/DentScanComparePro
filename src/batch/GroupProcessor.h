@@ -146,6 +146,9 @@ private:
     bool computeCurvature(std::vector<std::shared_ptr<ScanData>>& scans,
                           GroupResult& result);
 
+    bool computeTessellationMetrics(std::vector<std::shared_ptr<ScanData>>& scans,
+                                    GroupResult& result);
+
     bool runGPAAlignment(std::vector<std::shared_ptr<ScanData>>& scans,
                          const AlignmentConfig& alignment,
                          std::shared_ptr<SurfaceMesh>& gpaMean,

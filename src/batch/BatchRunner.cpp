@@ -282,14 +282,28 @@ bool BatchRunner::run(
             }
         }
 
-        // Resolve mask STL path: per-group entry takes priority; fall back to directory convention.
+        // Resolve mask STL path.
+        // When maskStlDirectory is set, it always takes precedence over any explicit
+        // roi_mask_stl path stored in the JSON (which may have been written by an
+        // older save that didn't know about the directory convention and therefore
+        // stored the same path for all groups).
         GroupConfig groupWithMask = group;
-        if (groupWithMask.roiMaskStlPath.isEmpty() && !config.maskStlDirectory.isEmpty()) {
+        if (!config.maskStlDirectory.isEmpty()) {
             QString candidate = QDir(config.maskStlDirectory).filePath(group.id + "_roi_mask.stl");
             if (QFile::exists(candidate)) {
                 groupWithMask.roiMaskStlPath = candidate;
                 if (m_verbose) {
                     std::cout << "    Mask STL (dir lookup): " << candidate.toStdString() << "\n" << std::flush;
+                }
+            } else {
+                // Per-group file doesn't exist in masks directory - clear any
+                // fallback roiMaskStlPath to prevent using a wrong mask from
+                // an older save that stored the same path for all groups.
+                // This ensures each group uses its own mask or falls back to full mesh.
+                groupWithMask.roiMaskStlPath.clear();
+                if (m_verbose) {
+                    std::cout << "    Mask STL: not found at " << candidate.toStdString()
+                              << " (will use full mesh)\n" << std::flush;
                 }
             }
         }

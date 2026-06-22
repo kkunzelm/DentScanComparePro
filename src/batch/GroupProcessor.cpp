@@ -126,6 +126,13 @@ GroupResult GroupProcessor::process(
         std::cout << "    Curvature: SKIPPED (pre-aligned, no tooth mask)\n" << std::flush;
     }
 
+    // Stage 2b: Compute tessellation metrics (always, regardless of curvature)
+    // Basic metrics (edge length, aspect ratio) don't require curvature.
+    // Curvature-dependent metrics (ATI, density) will be 0 if curvature wasn't computed.
+    if (!computeTessellationMetrics(scans, result)) {
+        return result;
+    }
+
     if (wasCancelled()) return result;
 
     // Stage 2.5: Apply precomputed transforms from DentScanAlign (if provided)
@@ -471,7 +478,7 @@ bool GroupProcessor::computeCurvature(
     std::vector<std::shared_ptr<ScanData>>& scans,
     GroupResult& result)
 {
-    emit progressUpdated(++m_currentStep, m_totalSteps, "Computing curvature and tessellation metrics");
+    emit progressUpdated(++m_currentStep, m_totalSteps, "Computing curvature");
     std::cout << "    Computing curvature..." << std::flush;
 
     for (auto& scan : scans) {
@@ -481,16 +488,22 @@ bool GroupProcessor::computeCurvature(
     }
 
     std::cout << " done\n" << std::flush;
+    return true;
+}
 
-    // Compute tessellation metrics (requires curvature to be computed first)
+bool GroupProcessor::computeTessellationMetrics(
+    std::vector<std::shared_ptr<ScanData>>& scans,
+    GroupResult& result)
+{
     std::cout << "    Computing tessellation metrics..." << std::flush;
+
     for (auto& scan : scans) {
         if (wasCancelled()) return false;
         std::cout << "." << std::flush;
         TessellationMetrics::compute(*scan);
     }
-    std::cout << " done\n" << std::flush;
 
+    std::cout << " done\n" << std::flush;
     return true;
 }
 
