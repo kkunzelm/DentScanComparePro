@@ -23,7 +23,7 @@ void BatchRunner::cancel() {
 }
 
 QString BatchRunner::progressFilePath(const QString& outputDir) {
-    return QDir(outputDir).filePath(".batch_progress.json");
+    return QDir(outputDir).filePath("batch_progress.json");
 }
 
 bool BatchRunner::saveProgress(const QString& outputDir, const QString& studyName,

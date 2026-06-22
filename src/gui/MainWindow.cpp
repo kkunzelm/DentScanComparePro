@@ -1749,7 +1749,7 @@ void MainWindow::runBatch()
 
     // If a progress file exists in the effective output directory, ask before resuming.
     // This prevents silently skipping all groups when re-using a directory from a previous run.
-    QString progressFile = outputDir + "/.batch_progress.json";
+    QString progressFile = outputDir + "/batch_progress.json";
     if (QFile::exists(progressFile)) {
         auto completedIds = DentScanBatch::BatchRunner::getCompletedGroups(outputDir, m_studyConfig.name);
         if (!completedIds.isEmpty()) {
