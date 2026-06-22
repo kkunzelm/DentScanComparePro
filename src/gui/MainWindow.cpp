@@ -101,6 +101,7 @@ void MainWindow::loadSettings()
     QSignalBlocker b7(m_roiTemplateEdit);
     QSignalBlocker b8(m_useMaskedICPChk);
     QSignalBlocker b9(m_maskedOutputDirEdit);
+    QSignalBlocker b13(m_maskStlDirEdit);
 
     m_studyPathEdit->setText(settings.value("paths/studyFile").toString());
     m_dataRootEdit->setText(settings.value("paths/dataRoot").toString());
@@ -112,6 +113,7 @@ void MainWindow::loadSettings()
 
     m_maskedOutputDirEdit->setText(settings.value("paths/maskedOutputDir").toString());
     m_externalRefEdit->setText(settings.value("paths/externalRef").toString());
+    m_maskStlDirEdit->setText(settings.value("paths/maskStlDir").toString());
     m_roiTemplateEdit->setText(settings.value("paths/roiTemplate").toString());
     m_scansPreAlignedChk->setChecked(settings.value("options/scansPreAligned", false).toBool());
     m_scansNormalizedChk->setChecked(settings.value("options/scansNormalized", true).toBool());
@@ -130,6 +132,7 @@ void MainWindow::saveSettings()
     settings.setValue("paths/outputDir", m_outputDirEdit->text());
     settings.setValue("paths/maskedOutputDir", m_maskedOutputDirEdit->text());
     settings.setValue("paths/externalRef", m_externalRefEdit->text());
+    settings.setValue("paths/maskStlDir", m_maskStlDirEdit->text());
     settings.setValue("paths/roiTemplate", m_roiTemplateEdit->text());
     settings.setValue("options/scansPreAligned", m_scansPreAlignedChk->isChecked());
     settings.setValue("options/scansNormalized", m_scansNormalizedChk->isChecked());
@@ -263,6 +266,32 @@ void MainWindow::setupConfigTab()
     refRow->addWidget(m_externalRefEdit, 1);
     refRow->addWidget(browseRefBtn);
     pathsLayout->addRow("External Ref:", refRow);
+
+    // ROI Masks directory — permanent home for per-group mask STLs
+    auto* maskDirRow = new QHBoxLayout();
+    m_maskStlDirEdit = new QLineEdit();
+    m_maskStlDirEdit->setPlaceholderText("Directory containing {groupId}_roi_mask.stl files");
+    m_maskStlDirEdit->setToolTip(
+        "Permanent directory for per-group mask STL files.\n"
+        "Each file must be named {groupId}_roi_mask.stl (e.g. 001_roi_mask.stl).\n"
+        "The ROI Template Editor will save mask STLs here by default.\n"
+        "Batch runner looks here when a group has no explicit roi_mask_stl path.");
+    auto* browseMaskDirBtn = new QPushButton("Browse...");
+    connect(browseMaskDirBtn, &QPushButton::clicked, this, &MainWindow::browseMaskStlDir);
+    connect(m_maskStlDirEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
+        if (m_configLoaded) {
+            m_studyConfig.maskStlDirectory = text;
+            QString studyPath = m_studyPathEdit->text();
+            if (!studyPath.isEmpty()) {
+                try { m_studyConfig.saveToFile(studyPath); }
+                catch (...) {}
+            }
+        }
+        saveSettings();
+    });
+    maskDirRow->addWidget(m_maskStlDirEdit, 1);
+    maskDirRow->addWidget(browseMaskDirBtn);
+    pathsLayout->addRow("ROI Masks Dir:", maskDirRow);
 
     // ROI template (optional)
     auto* roiRow = new QHBoxLayout();
@@ -946,6 +975,27 @@ void MainWindow::browseExternalRef()
     }
 }
 
+void MainWindow::browseMaskStlDir()
+{
+    QString path = QFileDialog::getExistingDirectory(this,
+        "Select ROI Masks Directory",
+        m_maskStlDirEdit->text());
+
+    if (!path.isEmpty()) {
+        m_maskStlDirEdit->setText(path);
+        // Persist to study config and save to disk
+        if (m_configLoaded) {
+            m_studyConfig.maskStlDirectory = path;
+            QString studyPath = m_studyPathEdit->text();
+            if (!studyPath.isEmpty()) {
+                try { m_studyConfig.saveToFile(studyPath); }
+                catch (...) {}
+            }
+        }
+        saveSettings();
+    }
+}
+
 void MainWindow::browseROITemplate()
 {
     QString path = QFileDialog::getOpenFileName(this,
@@ -972,6 +1022,13 @@ void MainWindow::loadStudyConfig()
         updateStudyOverview();
         m_runBatchBtn->setEnabled(true);
         m_statusLabel->setText("Configuration loaded: " + m_studyConfig.name);
+
+        // Populate maskStlDir from study config (if set)
+        if (!m_studyConfig.maskStlDirectory.isEmpty()) {
+            QSignalBlocker blk(m_maskStlDirEdit);
+            m_maskStlDirEdit->setText(m_studyConfig.maskStlDirectory);
+            saveSettings();
+        }
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Load Error",
             QString("Failed to load study configuration:\n%1").arg(e.what()));
@@ -1230,7 +1287,22 @@ void MainWindow::saveROITemplate()
 {
     QSettings settings("DentScanComparePro", "DentScanComparePro");
     QString lastPath = settings.value("paths/lastROIEditorTemplate").toString();
+
+    // Build a smart default path:
+    // If a masks directory and a group ID can be inferred, default to
+    // {maskStlDir}/{groupId}_roi_template.json so the JSON and STL end up
+    // in the permanent masks directory instead of the batch output directory.
     QString defaultPath = lastPath.isEmpty() ? "roi_template.json" : lastPath;
+    QString maskStlDir = m_maskStlDirEdit->text().trimmed();
+    if (!maskStlDir.isEmpty() && m_templateScan) {
+        QString stlName = QFileInfo(m_templatePathEdit->text()).baseName();
+        QString inferredId = stlName.section('_', 0, 0);
+        if (!inferredId.isEmpty()) {
+            QDir dir(maskStlDir);
+            if (dir.exists())
+                defaultPath = dir.filePath(inferredId + "_roi_template.json");
+        }
+    }
 
     QString path = QFileDialog::getSaveFileName(this,
         "Save ROI Template",
@@ -1321,9 +1393,18 @@ void MainWindow::saveROITemplate()
     file.close();
     settings.setValue("paths/lastROIEditorTemplate", path);
 
-    // Export ROI mask as STL alongside the JSON template
-    QString stlPath = QFileInfo(path).absolutePath() + "/" +
-                      QFileInfo(path).completeBaseName() + "_roi_mask.stl";
+    // Export ROI mask STL.
+    // If a masks directory is configured, save there as {groupId}_roi_mask.stl
+    // so it lives in a permanent location independent of the batch output directory.
+    // Otherwise, save alongside the JSON template.
+    QString stlStemBase = QFileInfo(path).completeBaseName();
+    QString inferredGroupId = stlStemBase.section('_', 0, 0);  // first token, e.g. "002"
+    QString stlPath;
+    if (!maskStlDir.isEmpty() && !inferredGroupId.isEmpty() && QDir(maskStlDir).exists()) {
+        stlPath = QDir(maskStlDir).filePath(inferredGroupId + "_roi_mask.stl");
+    } else {
+        stlPath = QFileInfo(path).absolutePath() + "/" + stlStemBase + "_roi_mask.stl";
+    }
     bool stlOk = false;
     if (m_templateScan) {
         // Build ROI submesh: keep only faces where all 3 vertices pass the current ROI filter
@@ -1687,6 +1768,11 @@ void MainWindow::runBatch()
     }
     m_batchLog->append("");
 
+    // Sync maskStlDirectory from UI field (may differ from what was loaded from JSON)
+    QString uiMaskDir = m_maskStlDirEdit->text().trimmed();
+    if (!uiMaskDir.isEmpty())
+        m_studyConfig.maskStlDirectory = uiMaskDir;
+
     // Update study config with GUI settings
     m_studyConfig.externalReferencePath = externalRef;
     m_studyConfig.scansPreAligned = scansPreAligned;
@@ -1735,24 +1821,41 @@ void MainWindow::runBatch()
                 .arg(e.what()));
         }
     } else if (useMaskedICP) {
-        // Report per-group mask STL status
-        int nFound = 0, nMissing = 0;
+        // Report per-group mask STL status — check both per-group path and directory fallback
+        QString maskDir = m_studyConfig.maskStlDirectory;
+        if (maskDir.isEmpty()) maskDir = m_maskStlDirEdit->text().trimmed();
+        int nFound = 0, nMissingDir = 0, nMissingAll = 0;
         for (const auto& g : m_studyConfig.groups) {
-            if (!g.roiMaskStlPath.isEmpty()) {
+            QString effective = g.roiMaskStlPath;
+            if (effective.isEmpty() && !maskDir.isEmpty()) {
+                QString candidate = QDir(maskDir).filePath(g.id + "_roi_mask.stl");
+                if (QFile::exists(candidate)) effective = candidate;
+            }
+            if (!effective.isEmpty() && QFile::exists(effective)) {
                 ++nFound;
+            } else if (!maskDir.isEmpty() && g.roiMaskStlPath.isEmpty()) {
+                ++nMissingDir;
+                m_batchLog->append(QString("  Group %1: no mask STL in %2/{id}_roi_mask.stl — will use full mesh")
+                    .arg(g.id, maskDir));
             } else {
-                ++nMissing;
+                ++nMissingAll;
                 m_batchLog->append(QString("  Group %1: no mask STL — will use full mesh").arg(g.id));
             }
         }
+        int nTotal = static_cast<int>(m_studyConfig.groups.size());
+        int nMissing = nMissingDir + nMissingAll;
         if (nFound > 0) {
-            m_batchLog->append(QString("Masked ICP: %1/%2 groups have mask STL, %3 will use full mesh")
-                .arg(nFound).arg(m_studyConfig.groups.size()).arg(nMissing));
+            m_batchLog->append(QString("Masked ICP: %1/%2 groups have mask STL%3")
+                .arg(nFound).arg(nTotal)
+                .arg(nMissing > 0 ? QString(", %1 will use full mesh").arg(nMissing) : QString()));
+            if (!maskDir.isEmpty())
+                m_batchLog->append(QString("ROI Masks Dir: %1").arg(maskDir));
         } else {
             m_batchLog->append("Masked ICP: No mask STL found for any group.");
+            if (!maskDir.isEmpty())
+                m_batchLog->append(QString("  Looked in ROI Masks Dir: %1").arg(maskDir));
             m_batchLog->append("  Check that the study JSON contains 'roi_mask_stl' entries,");
-            m_batchLog->append("  or that the old 'roi_template_file' JSON files still exist on disk");
-            m_batchLog->append("  alongside their companion _roi_mask.stl files.");
+            m_batchLog->append("  or save ROI templates via the ROI Template Editor.");
         }
     }
 

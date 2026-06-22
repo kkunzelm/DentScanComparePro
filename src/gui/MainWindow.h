@@ -51,6 +51,7 @@ private slots:
     void browseOutputDir();
     void browseMaskedOutputDir();
     void browseExternalRef();
+    void browseMaskStlDir();
     void browseROITemplate();
     void loadStudyConfig();
 
@@ -159,6 +160,7 @@ private:
     QLineEdit* m_outputDirEdit = nullptr;
     QLineEdit* m_maskedOutputDirEdit = nullptr;
     QLineEdit* m_externalRefEdit = nullptr;
+    QLineEdit* m_maskStlDirEdit = nullptr;
     QLineEdit* m_roiTemplateEdit = nullptr;
     class QCheckBox* m_scansPreAlignedChk = nullptr;
     class QCheckBox* m_scansNormalizedChk = nullptr;

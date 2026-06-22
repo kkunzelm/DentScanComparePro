@@ -282,9 +282,21 @@ bool BatchRunner::run(
             }
         }
 
+        // Resolve mask STL path: per-group entry takes priority; fall back to directory convention.
+        GroupConfig groupWithMask = group;
+        if (groupWithMask.roiMaskStlPath.isEmpty() && !config.maskStlDirectory.isEmpty()) {
+            QString candidate = QDir(config.maskStlDirectory).filePath(group.id + "_roi_mask.stl");
+            if (QFile::exists(candidate)) {
+                groupWithMask.roiMaskStlPath = candidate;
+                if (m_verbose) {
+                    std::cout << "    Mask STL (dir lookup): " << candidate.toStdString() << "\n" << std::flush;
+                }
+            }
+        }
+
         // Process the group (with QC export to outputDir)
         GroupResult result = processor.process(
-            group, files, config.alignment, roiTemplate, outputDir,
+            groupWithMask, files, config.alignment, roiTemplate, outputDir,
             config.externalReferencePath, config.scansPreAligned,
             precomputedTransforms, forceFullMesh,
             config.metrics.computePrecision,

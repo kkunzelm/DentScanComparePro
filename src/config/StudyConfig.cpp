@@ -149,6 +149,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     config.metrics.computePrecision = study["compute_precision"].toBool(true);
     config.scansNormalized = study["scans_normalized"].toBool(true);
     config.alignmentsDirectory = study["alignments_directory"].toString();
+    config.maskStlDirectory = study["mask_stl_directory"].toString();
 
     // Alignment config
     auto align = study["alignment"].toObject();
@@ -274,6 +275,9 @@ void StudyConfig::saveToJSON(const QString& path) const {
     study["scans_normalized"] = scansNormalized;
     if (!alignmentsDirectory.isEmpty()) {
         study["alignments_directory"] = alignmentsDirectory;
+    }
+    if (!maskStlDirectory.isEmpty()) {
+        study["mask_stl_directory"] = maskStlDirectory;
     }
 
     QJsonObject align;

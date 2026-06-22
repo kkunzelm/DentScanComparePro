@@ -104,6 +104,10 @@ public:
     MetricsConfig metrics;
     OutputConfig output;
 
+    // Directory containing per-group mask STLs, named {groupId}_roi_mask.stl.
+    // Used as lookup path when a group's roiMaskStlPath is empty.
+    QString maskStlDirectory;
+
     // Data root directory (can be overridden from command line)
     QString dataRootDir;
 

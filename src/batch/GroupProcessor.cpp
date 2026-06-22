@@ -374,13 +374,31 @@ GroupResult GroupProcessor::process(
     if (wasCancelled()) return result;
 
     // Stage 8 (optional): Export QC data.
-    // In mask STL mode: distanceToRef already reflects scan→mask distances (filled by
-    // computeDistances); no zeroing needed — scan vertices outside the mask region
-    // naturally show their distance to the nearest mask boundary.
-    // Fallback path: zero out distanceToRef for vertices outside the geometric ROI so
-    // they appear neutral (white) in MeshLab.
+    // Zero out distanceToRef for vertices outside the region of interest so they
+    // appear neutral (white/grey) in MeshLab and QC review images.
     if (!outputDir.isEmpty()) {
-        if (!useMaskStl && useROIRef) {
+        if (useMaskStl) {
+            // Mask STL path: distanceToRef contains scan→mask distances for ALL scan
+            // vertices. Vertices outside the mask coverage area show distance to the
+            // nearest mask boundary, creating misleading colour outside the ROI.
+            // Zero them out: a vertex is "outside" if its distance to the mask surface
+            // exceeds the 99th percentile of |maskDistances| + 1 mm safety margin.
+            for (auto& scan : scans) {
+                if (scan->maskDistances.empty() || scan->distanceToRef.empty()) continue;
+
+                std::vector<double> absMask;
+                absMask.reserve(scan->maskDistances.size());
+                for (double d : scan->maskDistances)
+                    absMask.push_back(std::abs(d));
+                std::sort(absMask.begin(), absMask.end());
+                double p99 = absMask[static_cast<std::size_t>(absMask.size() * 0.99)];
+                double threshold = p99 + 1.0;  // +1 mm safety margin
+
+                for (double& d : scan->distanceToRef) {
+                    if (std::abs(d) > threshold) d = 0.0;
+                }
+            }
+        } else if (useROIRef) {
             for (auto& scan : scans) {
                 double z_occ = computeOcclusalZ(scan->mesh);
                 std::size_t idx = 0;
