@@ -1735,15 +1735,24 @@ void MainWindow::runBatch()
                 .arg(e.what()));
         }
     } else if (useMaskedICP) {
-        // Check whether per-group templates are defined in the study config
-        int nGroupsWithTemplate = 0;
-        for (const auto& g : m_studyConfig.groups)
-            if (!g.roiMaskStlPath.isEmpty()) ++nGroupsWithTemplate;
-        if (nGroupsWithTemplate > 0) {
-            m_batchLog->append(QString("Masked ICP: no global template — using per-group ROI templates (%1/%2 groups configured)")
-                .arg(nGroupsWithTemplate).arg(m_studyConfig.groups.size()));
+        // Report per-group mask STL status
+        int nFound = 0, nMissing = 0;
+        for (const auto& g : m_studyConfig.groups) {
+            if (!g.roiMaskStlPath.isEmpty()) {
+                ++nFound;
+            } else {
+                ++nMissing;
+                m_batchLog->append(QString("  Group %1: no mask STL — will use full mesh").arg(g.id));
+            }
+        }
+        if (nFound > 0) {
+            m_batchLog->append(QString("Masked ICP: %1/%2 groups have mask STL, %3 will use full mesh")
+                .arg(nFound).arg(m_studyConfig.groups.size()).arg(nMissing));
         } else {
-            m_batchLog->append("Masked ICP: No ROI template specified, using full-mesh ICP");
+            m_batchLog->append("Masked ICP: No mask STL found for any group.");
+            m_batchLog->append("  Check that the study JSON contains 'roi_mask_stl' entries,");
+            m_batchLog->append("  or that the old 'roi_template_file' JSON files still exist on disk");
+            m_batchLog->append("  alongside their companion _roi_mask.stl files.");
         }
     }
 

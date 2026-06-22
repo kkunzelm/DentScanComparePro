@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFileInfo>
+#include <QDebug>
 #include <stdexcept>
 
 #ifdef HAVE_YAML_CPP
@@ -215,8 +216,14 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
             if (!oldJson.isEmpty()) {
                 QString derived = QFileInfo(oldJson).absolutePath() + "/" +
                                   QFileInfo(oldJson).completeBaseName() + "_roi_mask.stl";
-                if (QFile::exists(derived))
+                if (QFile::exists(derived)) {
                     group.roiMaskStlPath = derived;
+                    qDebug("Migration: group %s -> %s",
+                           qPrintable(group.id), qPrintable(derived));
+                } else {
+                    qDebug("Migration: group %s: STL not found at %s (JSON: %s)",
+                           qPrintable(group.id), qPrintable(derived), qPrintable(oldJson));
+                }
             }
         }
         config.groups.push_back(group);
