@@ -1386,8 +1386,10 @@ void MainWindow::saveROITemplate()
         for (int i = 0; i < static_cast<int>(m_studyConfig.groups.size()); ++i) {
             if (m_studyConfig.groups[i].id == inferredId) { groupIdx = i; break; }
         }
-        if (groupIdx >= 0)
-            m_studyConfig.groups[groupIdx].roiTemplatePath = path;
+        if (groupIdx >= 0) {
+            m_studyConfig.groups[groupIdx].roiMaskStlPath = stlPath;
+            m_studyConfig.groups[groupIdx].roi.outlierSigma = m_sigmaSpin->value();
+        }
 
         // Write updated study config back to disk
         QString studyPath = m_studyPathEdit->text();
@@ -1736,7 +1738,7 @@ void MainWindow::runBatch()
         // Check whether per-group templates are defined in the study config
         int nGroupsWithTemplate = 0;
         for (const auto& g : m_studyConfig.groups)
-            if (!g.roiTemplatePath.isEmpty()) ++nGroupsWithTemplate;
+            if (!g.roiMaskStlPath.isEmpty()) ++nGroupsWithTemplate;
         if (nGroupsWithTemplate > 0) {
             m_batchLog->append(QString("Masked ICP: no global template — using per-group ROI templates (%1/%2 groups configured)")
                 .arg(nGroupsWithTemplate).arg(m_studyConfig.groups.size()));

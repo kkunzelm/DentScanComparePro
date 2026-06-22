@@ -41,9 +41,14 @@ struct ScanData {
     Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
     bool registered = false;
 
-    // --- distance to GPA reference (per vertex) ---
+    // --- distance to GPA reference (per vertex, for QC visualization) ---
     std::vector<double> distanceToRef;    // signed distance [mm]
     bool distanceComputed = false;
+
+    // --- distance from mask STL vertices to this scan (for trueness metrics) ---
+    // One entry per mask vertex: maskDistances[i] = signed distance from mask vertex i
+    // to nearest point on this scan surface. Empty when no mask STL is used.
+    std::vector<double> maskDistances;
 
     // --- cached stats (filled on load) ---
     std::size_t triangleCount = 0;

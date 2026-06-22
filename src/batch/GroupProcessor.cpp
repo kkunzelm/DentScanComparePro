@@ -51,35 +51,43 @@ GroupResult GroupProcessor::process(
     m_cancelled = false;
     m_currentStep = 0;
 
-    // Per-group ROI template overrides the study-wide template when set
-    std::optional<ROITemplate> resolvedTemplate = roiTemplate;
-    if (!forceFullMesh && !group.roiTemplatePath.isEmpty()) {
-        if (QFile::exists(group.roiTemplatePath)) {
-            try {
-                resolvedTemplate = ROITemplate::loadFromFile(group.roiTemplatePath);
-                std::cout << "    Per-group ROI template: "
-                          << group.roiTemplatePath.toStdString() << "\n" << std::flush;
-            } catch (const std::exception& e) {
-                result.warnings.append(QString("Failed to load per-group ROI template '%1': %2")
-                    .arg(group.roiTemplatePath).arg(e.what()));
+    // Load per-group mask STL if set (new direct-STL mechanism)
+    std::shared_ptr<SurfaceMesh> maskMesh;
+    if (!forceFullMesh && !group.roiMaskStlPath.isEmpty()) {
+        if (QFile::exists(group.roiMaskStlPath)) {
+            std::string err;
+            auto tmp = STLReader::read(group.roiMaskStlPath.toStdString(), err);
+            if (tmp && tmp->mesh.number_of_vertices() > 0) {
+                maskMesh = std::make_shared<SurfaceMesh>(tmp->mesh);
+                std::cout << "    Mask STL: " << group.roiMaskStlPath.toStdString()
+                          << " (" << maskMesh->number_of_vertices() << " vertices)\n" << std::flush;
+            } else {
+                result.warnings.append(QString("Failed to load mask STL '%1': %2")
+                    .arg(group.roiMaskStlPath, QString::fromStdString(err)));
             }
         } else {
-            result.warnings.append(QString("Per-group ROI template not found: %1")
-                .arg(group.roiTemplatePath));
+            result.warnings.append(QString("Mask STL not found: %1").arg(group.roiMaskStlPath));
         }
     }
+    const bool useMaskStl = (maskMesh != nullptr);
 
-    // Calculate total steps based on options
-    // Curvature is skipped when scans are pre-aligned and no ROI tooth mask is needed
-    bool needCurvature = !scansPreAligned || (resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty());
+    // Fallback: study-wide JSON template (used only when no per-group mask STL is set)
+    std::optional<ROITemplate> resolvedTemplate;
+    if (!useMaskStl && !forceFullMesh) {
+        resolvedTemplate = roiTemplate;
+    }
+
+    // Curvature is skipped when scans are pre-aligned and no tooth mask is needed
+    bool needCurvature = !scansPreAligned ||
+        (!useMaskStl && resolvedTemplate.has_value() &&
+         resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty());
 
     int steps = 4; // Load, Distances, Trueness, Precision
-    if (needCurvature) steps++; // Curvature + tessellation
-    if (externalRefPath.isEmpty()) {
-        steps++; // GPA alignment or pre-aligned ICP refinement
-    }
-    if (resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
-        steps++; // Tooth segmentation (now before alignment)
+    if (needCurvature) steps++;
+    if (externalRefPath.isEmpty()) steps++;
+    if (!useMaskStl && resolvedTemplate.has_value() &&
+        resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
+        steps++;
     }
     m_totalSteps = steps;
 
@@ -88,18 +96,14 @@ GroupResult GroupProcessor::process(
         return result;
     }
 
-    // Effective ROI for both ICP masking and metric evaluation.
-    // Computed once here so all stages share the same config.
-    const ROIConfig effectiveROI = (!forceFullMesh && resolvedTemplate.has_value())
+    // Effective ROI config: used for sigma clip and (fallback path) geometric filtering.
+    // When useMaskStl=true the geometric fields (bbox, z-plane, brush) are ignored;
+    // sigma comes from group.roi.outlierSigma (written by ROI Template Editor).
+    const ROIConfig effectiveROI = (!useMaskStl && !forceFullMesh && resolvedTemplate.has_value())
                                    ? resolvedTemplate->roi : group.roi;
 
-    // Whether to apply the geometric ROI to the REFERENCE mesh (recommended approach).
-    // Masking the reference once means the absolute-coordinate ROI only needs to
-    // match the canonical reference frame; individual source scans are aligned to
-    // the masked reference via standard unmasked ICP regardless of their starting
-    // position. Geometric-only (bbox / z-plane / brush) — tooth masks cannot be
-    // transferred to the reference without re-running segmentation on it.
-    const bool useROIRef = !forceFullMesh &&
+    // useROIRef is only meaningful in the fallback (non-STL) path.
+    const bool useROIRef = !useMaskStl && !forceFullMesh &&
         (effectiveROI.bbox.active || effectiveROI.zPlane.active ||
          !effectiveROI.brushZones.empty());
 
@@ -145,27 +149,22 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 3 (MOVED EARLIER): Compute tooth masks BEFORE alignment
-    // This allows masked ICP to focus on tooth surfaces
-    // Skip when forceFullMesh is set (user disabled ROI/masked ICP in GUI)
+    // Tooth masks (fallback path only — not used when mask STL is active)
     std::vector<std::vector<bool>> toothMasks;
-    if (!forceFullMesh && resolvedTemplate.has_value() && resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
+    if (!useMaskStl && !forceFullMesh && resolvedTemplate.has_value() &&
+        resolvedTemplate->useToothMask && !resolvedTemplate->toothSeeds.empty()) {
         emit progressUpdated(++m_currentStep, m_totalSteps, "Computing tooth segmentation");
         std::cout << "    Computing tooth segmentation..." << std::flush;
         toothMasks = computeToothMasks(scans, *resolvedTemplate);
         std::cout << " done (" << toothMasks.size() << " masks)\n" << std::flush;
-    } else if (forceFullMesh) {
-        std::cout << "    Tooth segmentation: SKIPPED (full-mesh mode)\n" << std::flush;
     }
 
     if (wasCancelled()) return result;
 
-    // Build combined ICP masks (geometric ROI + tooth mask) per scan.
-    // These are used during alignment so ICP focuses on the same region
-    // that will be evaluated in the metrics.  Computed once here; kept fixed
-    // across GPA cycles (valid because GPA moves scans by only small amounts).
+    // Per-scan ICP masks (fallback path only — when mask STL is active, the mask mesh
+    // itself is used as the ICP reference; no per-scan boolean vectors are needed)
     std::vector<std::vector<bool>> icpMasks;
-    if (!forceFullMesh && hasActiveROI(effectiveROI, !toothMasks.empty())) {
+    if (!useMaskStl && !forceFullMesh && hasActiveROI(effectiveROI, !toothMasks.empty())) {
         std::cout << "    Building ICP masks (";
         if (effectiveROI.bbox.active)              std::cout << "bbox ";
         if (effectiveROI.zPlane.active)            std::cout << "z-plane ";
@@ -209,7 +208,11 @@ GroupResult GroupProcessor::process(
 
         ScanData refData;
         refData.registered = true;
-        if (useROIRef) {
+        if (useMaskStl) {
+            refData.mesh = *maskMesh;
+            std::cout << "    ICP reference (mask STL): "
+                      << maskMesh->number_of_vertices() << " vertices\n" << std::flush;
+        } else if (useROIRef) {
             auto masked = extractROIReference(*referenceMesh, effectiveROI);
             if (masked->mesh.number_of_vertices() > 0) {
                 refData = *masked;
@@ -265,7 +268,11 @@ GroupResult GroupProcessor::process(
 
             ScanData initRefData;
             initRefData.registered = true;
-            if (useROIRef) {
+            if (useMaskStl) {
+                initRefData.mesh = *maskMesh;
+                std::cout << "    Pre-aligned mode: ICP reference (mask STL): "
+                          << maskMesh->number_of_vertices() << " vertices\n" << std::flush;
+            } else if (useROIRef) {
                 auto masked = extractROIReference((*refIt)->mesh, effectiveROI);
                 if (masked->mesh.number_of_vertices() > 0) {
                     initRefData = *masked;
@@ -322,20 +329,18 @@ GroupResult GroupProcessor::process(
 
     if (wasCancelled()) return result;
 
-    // Stage 5: Compute distances to ROI-masked reference.
-    // The ROI is applied to the REFERENCE once here; every source scan (full mesh)
-    // is measured against this masked reference. Source vertices far from the ROI
-    // region naturally receive large distances and are excluded from metrics by
-    // maxMetricDist below — no per-scan coordinate-dependent ROI masking needed.
+    // Stage 5: Compute distances.
+    // With mask STL: distanceToRef is filled for QC visualization (scan vertex → mask surface);
+    //               maskDistances is filled for metrics (mask vertex → nearest on scan).
+    // Fallback path: distanceToRef computed against ROI-masked or full reference.
     std::shared_ptr<SurfaceMesh> distRefMesh = referenceMesh;
-    if (useROIRef) {
+    if (!useMaskStl && useROIRef) {
         auto maskedDist = extractROIReference(*referenceMesh, effectiveROI);
         if (maskedDist->mesh.number_of_vertices() > 0) {
             distRefMesh = std::make_shared<SurfaceMesh>(maskedDist->mesh);
             std::cout << "    Distance reference (ROI-masked): "
                       << maskedDist->mesh.number_of_vertices() << " / "
                       << referenceMesh->number_of_vertices() << " vertices\n" << std::flush;
-            // Save ROI-masked reference so it can be visually compared to the aligned scans
             if (!outputDir.isEmpty())
                 QCExporter::exportReferenceMesh(distRefMesh, outputDir,
                                                 result.groupId + "_roi");
@@ -344,22 +349,17 @@ GroupResult GroupProcessor::process(
         }
     }
 
-    if (!computeDistances(scans, distRefMesh, result)) {
+    if (!computeDistances(scans, distRefMesh, result, useMaskStl ? maskMesh : nullptr)) {
         return result;
     }
 
     if (wasCancelled()) return result;
 
-    // maxMetricDist: source vertices whose distance to the masked reference exceeds
-    // this value are outside the ROI region and excluded from trueness metrics.
-    // When no geometric ROI is active, all vertices are included (max double).
-    const double maxMetricDist = useROIRef ? 5.0 : std::numeric_limits<double>::max();
-
     const ROIConfig& metricsROI = forceFullMesh ? group.roi : effectiveROI;
 
     // Stage 6: Compute trueness metrics
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing trueness metrics");
-    computeTruenessMetrics(scans, files, metricsROI, group, toothMasks, result, maxMetricDist);
+    computeTruenessMetrics(scans, files, metricsROI, group, toothMasks, result);
 
     if (wasCancelled()) return result;
 
@@ -374,12 +374,13 @@ GroupResult GroupProcessor::process(
     if (wasCancelled()) return result;
 
     // Stage 8 (optional): Export QC data.
-    // Before writing the difference PLY files, zero out distanceToRef for vertices
-    // outside the geometric ROI so they appear neutral (white) in MeshLab instead
-    // of showing as coloured outliers. Metrics are already computed above so this
-    // modification does not affect any numerical results.
+    // In mask STL mode: distanceToRef already reflects scan→mask distances (filled by
+    // computeDistances); no zeroing needed — scan vertices outside the mask region
+    // naturally show their distance to the nearest mask boundary.
+    // Fallback path: zero out distanceToRef for vertices outside the geometric ROI so
+    // they appear neutral (white) in MeshLab.
     if (!outputDir.isEmpty()) {
-        if (useROIRef) {
+        if (!useMaskStl && useROIRef) {
             for (auto& scan : scans) {
                 double z_occ = computeOcclusalZ(scan->mesh);
                 std::size_t idx = 0;
@@ -549,36 +550,67 @@ bool GroupProcessor::runGPAAlignment(
 bool GroupProcessor::computeDistances(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const std::shared_ptr<SurfaceMesh>& gpaMean,
-    GroupResult& result)
+    GroupResult& result,
+    const std::shared_ptr<SurfaceMesh>& maskMesh)
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing distance fields");
-    std::cout << "    Computing distance fields..." << std::flush;
 
-    if (!gpaMean) {
-        result.errors.append("No GPA mean for distance computation");
-        return false;
-    }
+    if (maskMesh) {
+        // Mask STL path:
+        // 1. distanceToRef: scan vertex → nearest point on mask surface (for QC visualization)
+        // 2. maskDistances: mask vertex → nearest point on scan surface (for trueness metrics)
+        std::cout << "    Computing distances (mask STL mode)...\n" << std::flush;
 
-    // Build AABB tree once for the reference mesh (important for large references!)
-    std::cout << "\n";
-    DistanceField::ReferenceTree refTree(*gpaMean);
-    std::cout << "    Computing distances";
-
-    for (auto& scan : scans) {
-        if (wasCancelled()) return false;
-
-        scan->distanceToRef.clear();
-        refTree.computeDistances(*scan);
-
-        if (scan->distanceToRef.empty()) {
-            result.warnings.append(QString("Distance computation failed for: %1")
-                .arg(QString::fromStdString(scan->filePath)));
-            continue;
+        DistanceField::ReferenceTree maskTree(*maskMesh);
+        std::cout << "    Visualization distances (scan→mask)";
+        for (auto& scan : scans) {
+            if (wasCancelled()) return false;
+            scan->distanceToRef.clear();
+            maskTree.computeDistances(*scan);
+            std::cout << "." << std::flush;
         }
-        std::cout << "." << std::flush;
+        std::cout << " done\n" << std::flush;
+
+        std::cout << "    Metric distances (mask→scan)";
+        for (auto& scan : scans) {
+            if (wasCancelled()) return false;
+            scan->maskDistances.clear();
+            DistanceField::ReferenceTree scanTree(scan->mesh);
+            scan->maskDistances = scanTree.computePairwiseDistances(*maskMesh);
+            if (scan->maskDistances.empty()) {
+                result.warnings.append(QString("Mask distance computation failed for: %1")
+                    .arg(QString::fromStdString(scan->filePath)));
+            }
+            std::cout << "." << std::flush;
+        }
+        std::cout << " done\n" << std::flush;
+    } else {
+        // Fallback path: scan vertex → nearest point on GPA mean (or masked reference)
+        std::cout << "    Computing distance fields..." << std::flush;
+
+        if (!gpaMean) {
+            result.errors.append("No reference mesh for distance computation");
+            return false;
+        }
+
+        std::cout << "\n";
+        DistanceField::ReferenceTree refTree(*gpaMean);
+        std::cout << "    Computing distances";
+
+        for (auto& scan : scans) {
+            if (wasCancelled()) return false;
+            scan->distanceToRef.clear();
+            refTree.computeDistances(*scan);
+            if (scan->distanceToRef.empty()) {
+                result.warnings.append(QString("Distance computation failed for: %1")
+                    .arg(QString::fromStdString(scan->filePath)));
+                continue;
+            }
+            std::cout << "." << std::flush;
+        }
+        std::cout << " done\n" << std::flush;
     }
 
-    std::cout << " done\n" << std::flush;
     return true;
 }
 
@@ -673,8 +705,7 @@ void GroupProcessor::computeTruenessMetrics(
     const ROIConfig& roi,
     const GroupConfig& group,
     const std::vector<std::vector<bool>>& toothMasks,
-    GroupResult& result,
-    double maxMetricDist)
+    GroupResult& result)
 {
     std::cout << "    Computing trueness metrics..." << std::flush;
 
@@ -686,7 +717,13 @@ void GroupProcessor::computeTruenessMetrics(
 
     for (std::size_t scanIdx = 0; scanIdx < scans.size(); scanIdx++) {
         const auto& scan = scans[scanIdx];
-        if (!scan->distanceComputed || scan->distanceToRef.empty()) {
+
+        // Determine which distance source to use:
+        // - maskDistances (mask STL path): one entry per mask vertex, no further filtering needed
+        // - distanceToRef (fallback path): one entry per scan vertex, filtered by ROI and tooth mask
+        const bool useMaskDistances = !scan->maskDistances.empty();
+
+        if (!useMaskDistances && (scan->distanceToRef.empty())) {
             continue;
         }
 
@@ -711,39 +748,39 @@ void GroupProcessor::computeTruenessMetrics(
         ArchMetrics::computeBoundaryMetrics(*scan, report);
         ArchMetrics::computeStitchingArtifacts(*scan, report);
 
-        // Collect distances.
-        // Three-layer filter (all must pass):
-        // 1. |d| <= maxMetricDist  — coarse guard: excludes vertices >5 mm from the
-        //    masked reference; catches obvious soft-tissue regions far from the crown.
-        // 2. Source-side geometric ROI mask (bbox / z-plane / brush zones) computed
-        //    from the ALIGNED scan vertex positions. After ICP, the scan is in the
-        //    reference coordinate frame, so the ROI coordinates apply correctly.
-        //    This catches gingival vertices that are close (<5 mm) to the crown
-        //    boundary and would otherwise slip through filter 1.
-        // 3. Tooth segmentation mask (if active).
-        const std::vector<bool>* toothMask =
-            (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty())
-            ? &toothMasks[scanIdx] : nullptr;
-
-        // Build source-side geometric ROI mask (layer 2) when any component is active
-        bool hasGeomROI = roi.bbox.active || roi.zPlane.active || !roi.brushZones.empty();
-        std::vector<bool> geoMask;
-        if (hasGeomROI) {
-            double z_occ = computeOcclusalZ(scan->mesh);
-            geoMask = computeROIMask(*scan, roi, z_occ);
-        }
-
         std::vector<double> distances;
         std::vector<double> absDistances;
 
-        for (std::size_t i = 0; i < scan->distanceToRef.size(); i++) {
-            double d    = scan->distanceToRef[i];
-            double absD = std::abs(d);
-            if (absD > maxMetricDist) continue;
-            if (!geoMask.empty() && i < geoMask.size() && !geoMask[i]) continue;
-            if (toothMask && i < toothMask->size() && !(*toothMask)[i]) continue;
-            distances.push_back(d);
-            absDistances.push_back(absD);
+        if (useMaskDistances) {
+            // Mask STL path: distances are already from mask vertices only.
+            // No threshold filter, no geometric ROI filter, no tooth mask filter needed.
+            distances.reserve(scan->maskDistances.size());
+            absDistances.reserve(scan->maskDistances.size());
+            for (double d : scan->maskDistances) {
+                distances.push_back(d);
+                absDistances.push_back(std::abs(d));
+            }
+        } else {
+            // Fallback path: three-layer filter on scan-vertex distances.
+            const std::vector<bool>* toothMask =
+                (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty())
+                ? &toothMasks[scanIdx] : nullptr;
+
+            bool hasGeomROI = roi.bbox.active || roi.zPlane.active || !roi.brushZones.empty();
+            std::vector<bool> geoMask;
+            if (hasGeomROI) {
+                double z_occ = computeOcclusalZ(scan->mesh);
+                geoMask = computeROIMask(*scan, roi, z_occ);
+            }
+
+            for (std::size_t i = 0; i < scan->distanceToRef.size(); i++) {
+                double d    = scan->distanceToRef[i];
+                double absD = std::abs(d);
+                if (!geoMask.empty() && i < geoMask.size() && !geoMask[i]) continue;
+                if (toothMask && i < toothMask->size() && !(*toothMask)[i]) continue;
+                distances.push_back(d);
+                absDistances.push_back(absD);
+            }
         }
 
         report.verticesIncluded = distances.size();
