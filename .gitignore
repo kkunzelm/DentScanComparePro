@@ -51,6 +51,8 @@ Thumbs.db
 docs/*
 !docs/user-manual.md
 !docs/metric-interpretation.md
+!docs/computation-of-metrics.md
+!docs/developer-handoff.md
 
 # Study-specific scripts with individual paths (use *_generic.* versions instead)
 scripts/reorganize_scans.py
