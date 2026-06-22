@@ -151,9 +151,17 @@ bool BatchRunner::run(
     QSet<QString> completedGroups;
     int currentObsId = loadProgress(outputDir, config.name, completedGroups);
 
-    if (!completedGroups.isEmpty() && m_verbose) {
-        std::cout << "Resuming from previous run. Already completed: "
-                  << completedGroups.size() << " groups.\n" << std::flush;
+    QString progressPath = progressFilePath(outputDir);
+    if (!completedGroups.isEmpty()) {
+        emit logMessage(QString("Resuming: %1/%2 groups already completed.")
+            .arg(completedGroups.size()).arg(config.groups.size()));
+        emit logMessage(QString("Progress file: %1").arg(progressPath));
+        emit logMessage("To start fresh, delete that file or the entire output directory.");
+        if (m_verbose) {
+            std::cout << "Resuming from previous run. Already completed: "
+                      << completedGroups.size() << " groups.\n"
+                      << "Progress file: " << progressPath.toStdString() << "\n" << std::flush;
+        }
     }
 
     // Discover files for all groups
