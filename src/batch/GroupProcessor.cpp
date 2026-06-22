@@ -13,7 +13,10 @@
 #include "../qc/QCExporter.h"
 #include <QFileInfo>
 #include <QFile>
+#include <QtConcurrent>
+#include <QMutex>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <numeric>
 #include <map>
@@ -479,14 +482,18 @@ bool GroupProcessor::computeCurvature(
     GroupResult& result)
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Computing curvature");
-    std::cout << "    Computing curvature..." << std::flush;
+    std::cout << "    Computing curvature (parallel)..." << std::flush;
 
-    for (auto& scan : scans) {
-        if (wasCancelled()) return false;
-        std::cout << "." << std::flush;
+    std::atomic<bool> cancelled{false};
+    QtConcurrent::blockingMap(scans, [&](std::shared_ptr<ScanData>& scan) {
+        if (cancelled.load() || wasCancelled()) {
+            cancelled.store(true);
+            return;
+        }
         CurvatureAnalysis::compute(*scan);
-    }
+    });
 
+    if (cancelled.load()) return false;
     std::cout << " done\n" << std::flush;
     return true;
 }
@@ -495,14 +502,18 @@ bool GroupProcessor::computeTessellationMetrics(
     std::vector<std::shared_ptr<ScanData>>& scans,
     GroupResult& result)
 {
-    std::cout << "    Computing tessellation metrics..." << std::flush;
+    std::cout << "    Computing tessellation metrics (parallel)..." << std::flush;
 
-    for (auto& scan : scans) {
-        if (wasCancelled()) return false;
-        std::cout << "." << std::flush;
+    std::atomic<bool> cancelled{false};
+    QtConcurrent::blockingMap(scans, [&](std::shared_ptr<ScanData>& scan) {
+        if (cancelled.load() || wasCancelled()) {
+            cancelled.store(true);
+            return;
+        }
         TessellationMetrics::compute(*scan);
-    }
+    });
 
+    if (cancelled.load()) return false;
     std::cout << " done\n" << std::flush;
     return true;
 }
@@ -576,55 +587,81 @@ bool GroupProcessor::computeDistances(
         // Mask STL path:
         // 1. distanceToRef: scan vertex → nearest point on mask surface (for QC visualization)
         // 2. maskDistances: mask vertex → nearest point on scan surface (for trueness metrics)
-        std::cout << "    Computing distances (mask STL mode)...\n" << std::flush;
+        std::cout << "    Computing distances (mask STL mode, parallel)...\n" << std::flush;
 
         DistanceField::ReferenceTree maskTree(*maskMesh);
-        std::cout << "    Visualization distances (scan→mask)";
-        for (auto& scan : scans) {
-            if (wasCancelled()) return false;
+        std::cout << "    Visualization distances (scan→mask, parallel)..." << std::flush;
+
+        // Parallel: compute scan→mask distances
+        std::atomic<bool> cancelled{false};
+        QtConcurrent::blockingMap(scans, [&](std::shared_ptr<ScanData>& scan) {
+            if (cancelled.load() || wasCancelled()) {
+                cancelled.store(true);
+                return;
+            }
             scan->distanceToRef.clear();
             maskTree.computeDistances(*scan);
-            std::cout << "." << std::flush;
-        }
+        });
+        if (cancelled.load()) return false;
         std::cout << " done\n" << std::flush;
 
-        std::cout << "    Metric distances (mask→scan)";
-        for (auto& scan : scans) {
-            if (wasCancelled()) return false;
+        std::cout << "    Metric distances (mask→scan, parallel)..." << std::flush;
+
+        // Collect warnings thread-safely
+        QMutex warningMutex;
+        QStringList warnings;
+
+        // Parallel: compute mask→scan distances (each scan builds its own tree)
+        QtConcurrent::blockingMap(scans, [&](std::shared_ptr<ScanData>& scan) {
+            if (cancelled.load() || wasCancelled()) {
+                cancelled.store(true);
+                return;
+            }
             scan->maskDistances.clear();
             DistanceField::ReferenceTree scanTree(scan->mesh);
             scan->maskDistances = scanTree.computePairwiseDistances(*maskMesh);
             if (scan->maskDistances.empty()) {
-                result.warnings.append(QString("Mask distance computation failed for: %1")
+                QMutexLocker lock(&warningMutex);
+                warnings.append(QString("Mask distance computation failed for: %1")
                     .arg(QString::fromStdString(scan->filePath)));
             }
-            std::cout << "." << std::flush;
-        }
+        });
+        if (cancelled.load()) return false;
+
+        for (const auto& w : warnings) result.warnings.append(w);
         std::cout << " done\n" << std::flush;
     } else {
         // Fallback path: scan vertex → nearest point on GPA mean (or masked reference)
-        std::cout << "    Computing distance fields..." << std::flush;
+        std::cout << "    Computing distance fields (parallel)...\n" << std::flush;
 
         if (!gpaMean) {
             result.errors.append("No reference mesh for distance computation");
             return false;
         }
 
-        std::cout << "\n";
         DistanceField::ReferenceTree refTree(*gpaMean);
-        std::cout << "    Computing distances";
+        std::cout << "    Computing distances (parallel)..." << std::flush;
 
-        for (auto& scan : scans) {
-            if (wasCancelled()) return false;
+        QMutex warningMutex;
+        QStringList warnings;
+        std::atomic<bool> cancelled{false};
+
+        QtConcurrent::blockingMap(scans, [&](std::shared_ptr<ScanData>& scan) {
+            if (cancelled.load() || wasCancelled()) {
+                cancelled.store(true);
+                return;
+            }
             scan->distanceToRef.clear();
             refTree.computeDistances(*scan);
             if (scan->distanceToRef.empty()) {
-                result.warnings.append(QString("Distance computation failed for: %1")
+                QMutexLocker lock(&warningMutex);
+                warnings.append(QString("Distance computation failed for: %1")
                     .arg(QString::fromStdString(scan->filePath)));
-                continue;
             }
-            std::cout << "." << std::flush;
-        }
+        });
+        if (cancelled.load()) return false;
+
+        for (const auto& w : warnings) result.warnings.append(w);
         std::cout << " done\n" << std::flush;
     }
 
@@ -935,55 +972,76 @@ void GroupProcessor::computePrecisionMetrics(
 
         } else {
             // Fallback path: scan-to-scan pairwise distances with geometric ROI filter.
-            // Build N AABB trees once and reuse across all pairs.
+            // Build N AABB trees in parallel, then compute pairs in parallel.
             std::cout << "\n      Building AABB trees for " << scannerId << " ("
-                      << scannerScans.size() << " scans)..." << std::flush;
-            std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees;
-            trees.reserve(scannerScans.size());
-            for (const auto& scan : scannerScans) {
-                trees.push_back(std::make_unique<DistanceField::ReferenceTree>(scan->mesh));
-            }
-            std::cout << " done\n      Computing pairwise distances..." << std::flush;
+                      << scannerScans.size() << " scans, parallel)..." << std::flush;
 
+            std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees(scannerScans.size());
+            QList<int> treeIndices;
+            for (int i = 0; i < static_cast<int>(scannerScans.size()); ++i)
+                treeIndices.append(i);
+
+            QtConcurrent::blockingMap(treeIndices, [&](int i) {
+                trees[i] = std::make_unique<DistanceField::ReferenceTree>(scannerScans[i]->mesh);
+            });
+            std::cout << " done\n      Computing pairwise distances (parallel)..." << std::flush;
+
+            // Flatten pairs into a list for parallel processing
+            struct PairIndex { std::size_t i, j; };
+            std::vector<PairIndex> pairs;
             for (std::size_t i = 0; i < scannerScans.size(); i++) {
                 for (std::size_t j = i + 1; j < scannerScans.size(); j++) {
-                    const auto& scan1 = scannerScans[i];
-
-                    std::vector<double> distances = trees[j]->computePairwiseDistances(scan1->mesh);
-
-                    pairsDone++;
-                    if (pairsDone % 5 == 0 || pairsDone == totalPairs)
-                        std::cout << "." << std::flush;
-
-                    if (distances.empty()) continue;
-
-                    double z_occlusal = computeOcclusalZ(scan1->mesh);
-                    auto mask = computeROIMask(*scan1, roi, z_occlusal);
-
-                    auto it = scanToIndex.find(scan1.get());
-                    if (it != scanToIndex.end()) {
-                        std::size_t scanIdx = it->second;
-                        if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
-                            const auto& toothMask = toothMasks[scanIdx];
-                            for (std::size_t k = 0; k < mask.size() && k < toothMask.size(); k++)
-                                mask[k] = mask[k] && toothMask[k];
-                        }
-                    }
-
-                    double sq_sum = 0.0;
-                    std::size_t count = 0;
-                    for (std::size_t k = 0; k < distances.size() && k < mask.size(); k++) {
-                        if (mask[k]) {
-                            double d = distances[k];
-                            sq_sum += d * d;
-                            count++;
-                        }
-                    }
-                    if (count > 0)
-                        pairwiseRMS.push_back(std::sqrt(sq_sum / count));
+                    pairs.push_back({i, j});
                 }
             }
-            std::cout << " done (" << pairsDone << " pairs)\n" << std::flush;
+
+            // Results storage
+            std::vector<double> pairResults(pairs.size(), -1.0);
+
+            QtConcurrent::blockingMap(pairs, [&](const PairIndex& p) {
+                const auto& scan1 = scannerScans[p.i];
+                std::vector<double> distances = trees[p.j]->computePairwiseDistances(scan1->mesh);
+
+                if (distances.empty()) return;
+
+                double z_occlusal = computeOcclusalZ(scan1->mesh);
+                auto mask = computeROIMask(*scan1, roi, z_occlusal);
+
+                auto it = scanToIndex.find(scan1.get());
+                if (it != scanToIndex.end()) {
+                    std::size_t scanIdx = it->second;
+                    if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
+                        const auto& toothMask = toothMasks[scanIdx];
+                        for (std::size_t k = 0; k < mask.size() && k < toothMask.size(); k++)
+                            mask[k] = mask[k] && toothMask[k];
+                    }
+                }
+
+                double sq_sum = 0.0;
+                std::size_t count = 0;
+                for (std::size_t k = 0; k < distances.size() && k < mask.size(); k++) {
+                    if (mask[k]) {
+                        double d = distances[k];
+                        sq_sum += d * d;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    // Find index in pairs vector
+                    for (std::size_t pi = 0; pi < pairs.size(); ++pi) {
+                        if (pairs[pi].i == p.i && pairs[pi].j == p.j) {
+                            pairResults[pi] = std::sqrt(sq_sum / count);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // Collect valid results
+            for (double r : pairResults) {
+                if (r >= 0.0) pairwiseRMS.push_back(r);
+            }
+            std::cout << " done (" << totalPairs << " pairs)\n" << std::flush;
         }
 
         if (pairwiseRMS.empty()) {

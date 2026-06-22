@@ -9,7 +9,11 @@
 
 #include <Eigen/Eigenvalues>
 
+#include <QtConcurrent>
+#include <QFuture>
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -248,17 +252,21 @@ void updateToMeanMesh(ScanData& gpaRef,
     const std::size_t minValidScans = static_cast<std::size_t>(
         std::ceil(params.minValidScansFraction * scans.size()));
 
-    // Build AABB trees for all scans
-    std::vector<std::unique_ptr<AABBTree>> trees;
-    trees.reserve(scans.size());
-    std::cout << "    Mean mesh: building " << scans.size() << " AABB trees" << std::flush;
-    for (const auto& s : scans) {
-        auto t = std::make_unique<AABBTree>(
-            faces(s->mesh).first, faces(s->mesh).second, s->mesh);
-        t->accelerate_distance_queries();
-        trees.push_back(std::move(t));
-        std::cout << "." << std::flush;
+    // Build AABB trees for all scans (parallel)
+    std::cout << "    Mean mesh: building " << scans.size() << " AABB trees (parallel)..." << std::flush;
+    std::vector<std::unique_ptr<AABBTree>> trees(scans.size());
+
+    QList<int> indices;
+    for (int i = 0; i < static_cast<int>(scans.size()); ++i) {
+        indices.append(i);
     }
+
+    QtConcurrent::blockingMap(indices, [&](int i) {
+        auto t = std::make_unique<AABBTree>(
+            faces(scans[i]->mesh).first, faces(scans[i]->mesh).second, scans[i]->mesh);
+        t->accelerate_distance_queries();
+        trees[i] = std::move(t);
+    });
     std::cout << " done\n" << std::flush;
 
     // Compute vertex normals for the reference mesh (needed for normal consistency check)
@@ -270,15 +278,15 @@ void updateToMeanMesh(ScanData& gpaRef,
     }
 
     const std::size_t nVerts = gpaRef.mesh.num_vertices();
-    std::size_t vIdx = 0;
 
-    // Statistics for reporting
-    std::size_t totalDistanceRejections = 0;
-    std::size_t totalNormalRejections = 0;
-    std::size_t totalInsufficientCoverage = 0;
-    std::size_t totalVerticesUpdated = 0;
+    // Statistics for reporting (atomic for thread safety)
+    std::atomic<std::size_t> totalDistanceRejections{0};
+    std::atomic<std::size_t> totalNormalRejections{0};
+    std::atomic<std::size_t> totalInsufficientCoverage{0};
+    std::atomic<std::size_t> totalVerticesUpdated{0};
+    std::atomic<std::size_t> progressCounter{0};
 
-    std::cout << "    Mean mesh: updating " << nVerts << " vertices";
+    std::cout << "    Mean mesh: updating " << nVerts << " vertices (parallel)";
     if (useDistanceRejection || useNormalConsistency) {
         std::cout << " (robust mode: maxDist=" << params.maxCorrespondenceDistance
                   << "mm, minNormalDot=" << params.minNormalDotProduct
@@ -286,15 +294,45 @@ void updateToMeanMesh(ScanData& gpaRef,
     }
     std::cout << "\n" << std::flush;
 
+    // Collect vertex descriptors into a vector for indexed access
+    std::vector<VertexDesc> vertexList;
+    vertexList.reserve(nVerts);
     for (auto v : gpaRef.mesh.vertices()) {
-        const Point3& p = gpaRef.mesh.point(v);
+        vertexList.push_back(v);
+    }
+
+    // Pre-allocate output: new positions and validity flags
+    struct VertexResult {
+        Point3 newPos;
+        bool valid = false;  // true if vertex should be updated
+        std::size_t distReject = 0;
+        std::size_t normReject = 0;
+    };
+    std::vector<VertexResult> results(nVerts);
+
+    // Copy current positions for reading (mesh will be modified after parallel section)
+    std::vector<Point3> currentPositions;
+    currentPositions.reserve(nVerts);
+    for (auto v : gpaRef.mesh.vertices()) {
+        currentPositions.push_back(gpaRef.mesh.point(v));
+    }
+
+    // Raw pointers for lambda capture (trees vector)
+    const auto* treesPtr = trees.data();
+    const auto* scansPtr = scans.data();
+    const std::size_t numTrees = trees.size();
+
+    // Parallel vertex processing
+    QtConcurrent::blockingMap(vertexList, [&](const VertexDesc& v) {
+        const std::size_t idx = v.idx();
+        const Point3& p = currentPositions[idx];
         const double px = CGAL::to_double(p.x());
         const double py = CGAL::to_double(p.y());
         const double pz = CGAL::to_double(p.z());
 
         Eigen::Vector3d refNormal;
         if (useNormalConsistency) {
-            refNormal = refNormals[v.idx()];
+            refNormal = refNormals[idx];
         }
 
         double sx = 0.0, sy = 0.0, sz = 0.0;
@@ -302,8 +340,8 @@ void updateToMeanMesh(ScanData& gpaRef,
         std::size_t distReject = 0;
         std::size_t normReject = 0;
 
-        for (std::size_t si = 0; si < trees.size(); ++si) {
-            Point3 cp = trees[si]->closest_point(p);
+        for (std::size_t si = 0; si < numTrees; ++si) {
+            Point3 cp = treesPtr[si]->closest_point(p);
             double cpx = CGAL::to_double(cp.x());
             double cpy = CGAL::to_double(cp.y());
             double cpz = CGAL::to_double(cp.z());
@@ -316,45 +354,59 @@ void updateToMeanMesh(ScanData& gpaRef,
                 double distSq = dx*dx + dy*dy + dz*dz;
                 if (distSq > maxDistSq) {
                     distReject++;
-                    continue;  // Skip this scan for this vertex
+                    continue;
                 }
             }
 
             // Normal consistency check
             if (useNormalConsistency) {
                 Eigen::Vector3d scanNormal = computeNormalAtClosestPoint(
-                    scans[si]->mesh, cp);
+                    scansPtr[si]->mesh, cp);
                 double dotProduct = refNormal.dot(scanNormal);
                 if (dotProduct < params.minNormalDotProduct) {
                     normReject++;
-                    continue;  // Skip this scan for this vertex
+                    continue;
                 }
             }
 
-            // Valid correspondence — include in average
+            // Valid correspondence
             sx += cpx;
             sy += cpy;
             sz += cpz;
             validCount++;
         }
 
-        totalDistanceRejections += distReject;
-        totalNormalRejections += normReject;
+        // Store result for this vertex
+        VertexResult& res = results[idx];
+        res.distReject = distReject;
+        res.normReject = normReject;
 
-        // Update vertex position only if enough valid scans
         if (validCount >= minValidScans) {
             double invN = 1.0 / static_cast<double>(validCount);
-            gpaRef.mesh.point(v) = Point3(sx * invN, sy * invN, sz * invN);
-            totalVerticesUpdated++;
-        } else {
-            // Keep original position — insufficient valid coverage
-            totalInsufficientCoverage++;
+            res.newPos = Point3(sx * invN, sy * invN, sz * invN);
+            res.valid = true;
         }
 
-        if (++vIdx % 10000 == 0 || vIdx == nVerts) {
-            int pct = static_cast<int>(100 * vIdx / nVerts);
+        // Progress reporting (every 10000 vertices)
+        std::size_t count = ++progressCounter;
+        if (count % 10000 == 0 || count == nVerts) {
+            int pct = static_cast<int>(100 * count / nVerts);
             std::cout << "\r    Mean mesh: updating " << nVerts
                       << " vertices (" << pct << "%)   " << std::flush;
+        }
+    });
+
+    // Apply results to mesh (single-threaded, safe)
+    for (std::size_t i = 0; i < nVerts; ++i) {
+        const VertexResult& res = results[i];
+        totalDistanceRejections += res.distReject;
+        totalNormalRejections += res.normReject;
+
+        if (res.valid) {
+            gpaRef.mesh.point(vertexList[i]) = res.newPos;
+            totalVerticesUpdated++;
+        } else {
+            totalInsufficientCoverage++;
         }
     }
 
@@ -438,13 +490,30 @@ std::shared_ptr<ScanData> compute(
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
         std::cout << "    GPA cycle " << (cycle + 1) << "/" << params.maxGPAIterations
-                  << " (" << scans.size() << " scans):\n" << std::flush;
+                  << " (" << scans.size() << " scans, parallel):\n" << std::flush;
 
+        // Collect scan indices to process (excluding reference)
+        std::vector<std::size_t> scanIndices;
         for (std::size_t si = 0; si < scans.size(); ++si) {
-            auto& scan = scans[si];
-            if (scan.get() == refIt->get()) continue;
+            if (scans[si].get() != refIt->get()) {
+                scanIndices.push_back(si);
+            }
+        }
 
-            // Use per-scan mask when available (tooth mask or combined ROI mask).
+        // Results storage for parallel ICP
+        struct ICPResult {
+            std::size_t scanIndex;
+            std::string scannerName;
+            double finalRms;
+            int iterations;
+            bool converged;
+        };
+        std::vector<ICPResult> icpResults(scanIndices.size());
+
+        // Parallel ICP alignment
+        QtConcurrent::blockingMap(scanIndices, [&](std::size_t si) {
+            auto& scan = scans[si];
+
             const std::vector<bool>& icpMask =
                 (si < params.scanMasks.size()) ? params.scanMasks[si] : std::vector<bool>();
             const bool useMask = !icpMask.empty();
@@ -457,23 +526,28 @@ std::shared_ptr<ScanData> compute(
                 ICPRegistration::applyTransform(*scan, r0.transform);
             }
 
-            // Fine pass.
+            // Fine pass (no progress callback in parallel mode to avoid contention).
             auto r1 = useMask
-                ? ICPRegistration::alignMasked(*scan, *gpaRef, icpMask, fineP,
-                    [&](int it, double rms){
-                        if (progressCallback) progressCallback(cycle, (int)si, rms);
-                    })
-                : ICPRegistration::align(*scan, *gpaRef, fineP,
-                    [&](int it, double rms){
-                        if (progressCallback) progressCallback(cycle, (int)si, rms);
-                    });
+                ? ICPRegistration::alignMasked(*scan, *gpaRef, icpMask, fineP)
+                : ICPRegistration::align(*scan, *gpaRef, fineP);
             ICPRegistration::applyTransform(*scan, r1.transform);
 
-            std::cout << "      [" << std::setw(2) << (si + 1) << "/" << scans.size() << "]"
-                      << " " << std::left << std::setw(16) << scan->scannerName << std::right
-                      << "  res=" << std::fixed << std::setprecision(4) << r1.finalRms << " mm"
-                      << "  iter=" << std::setw(3) << r1.iterations
-                      << (r1.converged ? "" : "  [NOT CONVERGED]")
+            // Find result index for this scan
+            for (std::size_t ri = 0; ri < scanIndices.size(); ++ri) {
+                if (scanIndices[ri] == si) {
+                    icpResults[ri] = {si, scan->scannerName, r1.finalRms, r1.iterations, r1.converged};
+                    break;
+                }
+            }
+        });
+
+        // Print results in order after parallel phase
+        for (const auto& r : icpResults) {
+            std::cout << "      [" << std::setw(2) << (r.scanIndex + 1) << "/" << scans.size() << "]"
+                      << " " << std::left << std::setw(16) << r.scannerName << std::right
+                      << "  res=" << std::fixed << std::setprecision(4) << r.finalRms << " mm"
+                      << "  iter=" << std::setw(3) << r.iterations
+                      << (r.converged ? "" : "  [NOT CONVERGED]")
                       << "\n" << std::flush;
         }
 
