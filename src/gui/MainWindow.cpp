@@ -1747,6 +1747,31 @@ void MainWindow::runBatch()
         }
     }
 
+    // If a progress file exists in the effective output directory, ask before resuming.
+    // This prevents silently skipping all groups when re-using a directory from a previous run.
+    QString progressFile = outputDir + "/.batch_progress.json";
+    if (QFile::exists(progressFile)) {
+        auto completedIds = DentScanBatch::BatchRunner::getCompletedGroups(outputDir, m_studyConfig.name);
+        if (!completedIds.isEmpty()) {
+            auto ret = QMessageBox::question(this, "Previous Run Found",
+                QString("A previous run in this output directory has already completed %1 of %2 groups.\n\n"
+                        "Progress file:\n%3\n\n"
+                        "Resume (skip completed groups) or start fresh?")
+                    .arg(completedIds.size())
+                    .arg(m_studyConfig.groups.size())
+                    .arg(progressFile),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);   // default: Start Fresh
+            if (ret == QMessageBox::No) {
+                QFile::remove(progressFile);
+                m_batchLog->append("Progress file deleted — starting fresh.");
+            } else {   // QMessageBox::Yes = Resume
+                m_batchLog->append(QString("Resuming: %1/%2 groups already completed.")
+                    .arg(completedIds.size()).arg(m_studyConfig.groups.size()));
+            }
+        }
+    }
+
     // Create batch runner
     m_batchRunner = std::make_unique<DentScanBatch::BatchRunner>();
     m_batchRunner->setVerbose(true);
