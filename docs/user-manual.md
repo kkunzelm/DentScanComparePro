@@ -1004,6 +1004,88 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 
 ---
 
+## Reference Mesh Computation
+
+This section explains when and how the reference mesh (mean mesh) is computed, and how to trigger recalculation.
+
+### The Two Alignment Options (Mutually Exclusive)
+
+The GUI provides two checkboxes that are **mutually exclusive** — checking one automatically unchecks the other:
+
+| Checkbox | When to use | Effect |
+|----------|-------------|--------|
+| **Scans are normalized** ✓ | STL files from DentScanAlignPro with transform baked into geometry | Skip JSON transform loading. Run GPA but skip PCA coarse alignment (scans already oriented). |
+| **Scans are pre-aligned** ✓ | Raw STL files + JSON transform files from DentScanAlign | Load JSON transforms, apply them, then run ICP refinement only (skip full GPA). |
+| **Both unchecked** ☐ | Raw STL files with no prior alignment | Run full GPA with PCA coarse alignment. |
+
+### When Is a Reference Mesh (Mean Mesh) Computed?
+
+The reference mesh computation depends on **two factors**:
+
+1. **Is an external reference STL provided?** (via the "External Ref" field)
+2. **Which alignment option is selected?**
+
+**Decision table:**
+
+| External Reference | Alignment Option | Reference Mesh Source |
+|--------------------|------------------|----------------------|
+| **YES** (path provided) | any | **No mean mesh computed** — external STL is used directly as reference |
+| **NO** | normalized ✓ | **Full GPA** — iterative mean mesh computation (multiple cycles until convergence) |
+| **NO** | pre-aligned ✓ | **Single mean mesh update** — ICP refinement against largest scan, then one mean mesh computation |
+| **NO** | Both ☐ | **Full GPA with PCA** — PCA coarse alignment + iterative mean mesh computation |
+
+**Key insight:** A new reference mesh is computed whenever:
+- No external reference is provided, AND
+- Any of the three alignment options is used
+
+The difference between the options is **how** the mean mesh is computed:
+- **normalized** or **both unchecked**: Full GPA iteration — align all scans, compute mean, repeat until convergence
+- **pre-aligned**: Single pass — ICP refinement against the largest scan, then one mean mesh update
+
+### How to Recalculate Reference Meshes with Robust Averaging
+
+The software now includes **robust averaging** to prevent artifacts in the mean mesh (see docs/computation-of-metrics.md for details). To recalculate your reference meshes with these improvements:
+
+1. **Delete the existing reference meshes** (optional but recommended):
+   ```
+   rm -rf output_dir/qc/reference_meshes/
+   ```
+
+2. **Run the batch again** with your normal settings. The software will:
+   - Recompute the GPA alignment (or ICP refinement, depending on your settings)
+   - Generate new mean meshes using robust averaging with default parameters:
+     - `maxCorrespondenceDistance = 0.5 mm` — reject closest points farther than this
+     - `minNormalDotProduct = 0.5` — reject if normals differ by >60°
+     - `minValidScansFraction = 0.5` — keep original position if <50% of scans have valid data
+
+3. **Check the console output** for statistics:
+   ```
+   Mean mesh statistics:
+     Vertices updated:        45230 / 48000
+     Vertices kept original:  2770 (insufficient coverage)
+     Distance rejections:     12450 (across all vertices)
+     Normal rejections:       3200 (across all vertices)
+   ```
+
+**Note:** If you are using an external reference (`External Ref` field is set), no mean mesh is computed — the external STL is used directly. The robust averaging improvements do not apply in this case.
+
+### Typical Workflow for Recalculation
+
+For most users with normalized scans from DentScanAlignPro:
+
+```
+Settings:
+  ☑ Scans are normalized (checked)
+  ☐ Scans are pre-aligned (automatically unchecked)
+  External Ref: (empty)
+
+→ Runs full GPA (skip PCA since scans are oriented)
+→ Computes new mean mesh with robust averaging
+→ New reference meshes saved to qc/reference_meshes/
+```
+
+---
+
 ## Pipeline Stages
 
 The batch processor executes these stages for each SKD group:

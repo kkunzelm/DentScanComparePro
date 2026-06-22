@@ -147,19 +147,108 @@ void resolveZRotation(ScanData& scan, const ScanData& ref)
     }
 }
 
-// ─── True mean-mesh update ───────────────────────────────────────────────────
+// ─── Compute vertex normals ──────────────────────────────────────────────────
+// Returns a vector of unit normals, one per vertex, computed as the
+// area-weighted average of adjacent face normals.
+std::vector<Eigen::Vector3d> computeVertexNormals(const SurfaceMesh& mesh)
+{
+    std::vector<Eigen::Vector3d> normals(mesh.num_vertices(), Eigen::Vector3d::Zero());
+
+    for (auto f : mesh.faces()) {
+        auto h = mesh.halfedge(f);
+        auto v0 = mesh.source(h);
+        auto v1 = mesh.target(h);
+        auto v2 = mesh.target(mesh.next(h));
+
+        const Point3& p0 = mesh.point(v0);
+        const Point3& p1 = mesh.point(v1);
+        const Point3& p2 = mesh.point(v2);
+
+        Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+        Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+        Eigen::Vector3d faceNormal = e1.cross(e2);  // Area-weighted (not normalized)
+
+        normals[v0.idx()] += faceNormal;
+        normals[v1.idx()] += faceNormal;
+        normals[v2.idx()] += faceNormal;
+    }
+
+    for (auto& n : normals) {
+        double len = n.norm();
+        if (len > 1e-10) n /= len;
+    }
+
+    return normals;
+}
+
+// ─── Compute normal at closest point on scan surface ─────────────────────────
+// Given the closest point (which lies on a triangle), compute the face normal.
+Eigen::Vector3d computeNormalAtClosestPoint(
+    const SurfaceMesh& mesh,
+    const Point3& closestPoint)
+{
+    // Find the face containing the closest point by checking all faces.
+    // This is O(n) but we could optimize with spatial indexing if needed.
+    // For now, we use a tolerance-based search.
+    double bestDist = std::numeric_limits<double>::max();
+    Eigen::Vector3d bestNormal(0, 0, 1);
+
+    for (auto f : mesh.faces()) {
+        auto h = mesh.halfedge(f);
+        const Point3& p0 = mesh.point(mesh.source(h));
+        const Point3& p1 = mesh.point(mesh.target(h));
+        const Point3& p2 = mesh.point(mesh.target(mesh.next(h)));
+
+        // Compute face centroid and check distance to closest point
+        double cx = (p0.x() + p1.x() + p2.x()) / 3.0;
+        double cy = (p0.y() + p1.y() + p2.y()) / 3.0;
+        double cz = (p0.z() + p1.z() + p2.z()) / 3.0;
+
+        double dx = closestPoint.x() - cx;
+        double dy = closestPoint.y() - cy;
+        double dz = closestPoint.z() - cz;
+        double dist = dx*dx + dy*dy + dz*dz;
+
+        if (dist < bestDist) {
+            bestDist = dist;
+            Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+            Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+            bestNormal = e1.cross(e2);
+            double len = bestNormal.norm();
+            if (len > 1e-10) bestNormal /= len;
+        }
+    }
+
+    return bestNormal;
+}
+
+// ─── True mean-mesh update with robust averaging ─────────────────────────────
 // After GPA convergence the reference is still one scanner's mesh (the one
 // with the most triangles).  Updating each reference vertex to the centroid of
 // its nearest points on ALL aligned scans produces a neutral mean surface so
 // that every scanner — including the original reference — shows a non-zero
 // distance to it.
+//
+// This version includes outlier rejection to handle holes and inconsistent
+// coverage:
+// - Distance rejection: skip closest points farther than maxCorrespondenceDistance
+// - Normal consistency: skip closest points with significantly different normals
+// - Minimum coverage: keep original position if too few scans have valid data
 void updateToMeanMesh(ScanData& gpaRef,
-                      const std::vector<std::shared_ptr<ScanData>>& scans)
+                      const std::vector<std::shared_ptr<ScanData>>& scans,
+                      const MeanMeshParams& params)
 {
     using Primitive  = CGAL::AABB_face_graph_triangle_primitive<SurfaceMesh>;
     using AABBTraits = CGAL::AABB_traits_3<Kernel, Primitive>;
     using AABBTree   = CGAL::AABB_tree<AABBTraits>;
 
+    const bool useDistanceRejection = params.maxCorrespondenceDistance > 0.0;
+    const bool useNormalConsistency = params.minNormalDotProduct > 0.0;
+    const double maxDistSq = params.maxCorrespondenceDistance * params.maxCorrespondenceDistance;
+    const std::size_t minValidScans = static_cast<std::size_t>(
+        std::ceil(params.minValidScansFraction * scans.size()));
+
+    // Build AABB trees for all scans
     std::vector<std::unique_ptr<AABBTree>> trees;
     trees.reserve(scans.size());
     std::cout << "    Mean mesh: building " << scans.size() << " AABB trees" << std::flush;
@@ -172,36 +261,127 @@ void updateToMeanMesh(ScanData& gpaRef,
     }
     std::cout << " done\n" << std::flush;
 
+    // Compute vertex normals for the reference mesh (needed for normal consistency check)
+    std::vector<Eigen::Vector3d> refNormals;
+    if (useNormalConsistency) {
+        std::cout << "    Mean mesh: computing vertex normals..." << std::flush;
+        refNormals = computeVertexNormals(gpaRef.mesh);
+        std::cout << " done\n" << std::flush;
+    }
+
     const std::size_t nVerts = gpaRef.mesh.num_vertices();
-    const double invN = 1.0 / static_cast<double>(trees.size());
     std::size_t vIdx = 0;
-    std::cout << "    Mean mesh: updating " << nVerts << " vertices (0%)" << std::flush;
+
+    // Statistics for reporting
+    std::size_t totalDistanceRejections = 0;
+    std::size_t totalNormalRejections = 0;
+    std::size_t totalInsufficientCoverage = 0;
+    std::size_t totalVerticesUpdated = 0;
+
+    std::cout << "    Mean mesh: updating " << nVerts << " vertices";
+    if (useDistanceRejection || useNormalConsistency) {
+        std::cout << " (robust mode: maxDist=" << params.maxCorrespondenceDistance
+                  << "mm, minNormalDot=" << params.minNormalDotProduct
+                  << ", minScans=" << minValidScans << "/" << scans.size() << ")";
+    }
+    std::cout << "\n" << std::flush;
+
     for (auto v : gpaRef.mesh.vertices()) {
         const Point3& p = gpaRef.mesh.point(v);
-        double sx = 0.0, sy = 0.0, sz = 0.0;
-        for (const auto& tree : trees) {
-            Point3 cp = tree->closest_point(p);
-            sx += CGAL::to_double(cp.x());
-            sy += CGAL::to_double(cp.y());
-            sz += CGAL::to_double(cp.z());
+        const double px = CGAL::to_double(p.x());
+        const double py = CGAL::to_double(p.y());
+        const double pz = CGAL::to_double(p.z());
+
+        Eigen::Vector3d refNormal;
+        if (useNormalConsistency) {
+            refNormal = refNormals[v.idx()];
         }
-        gpaRef.mesh.point(v) = Point3(sx * invN, sy * invN, sz * invN);
+
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        std::size_t validCount = 0;
+        std::size_t distReject = 0;
+        std::size_t normReject = 0;
+
+        for (std::size_t si = 0; si < trees.size(); ++si) {
+            Point3 cp = trees[si]->closest_point(p);
+            double cpx = CGAL::to_double(cp.x());
+            double cpy = CGAL::to_double(cp.y());
+            double cpz = CGAL::to_double(cp.z());
+
+            // Distance rejection check
+            if (useDistanceRejection) {
+                double dx = cpx - px;
+                double dy = cpy - py;
+                double dz = cpz - pz;
+                double distSq = dx*dx + dy*dy + dz*dz;
+                if (distSq > maxDistSq) {
+                    distReject++;
+                    continue;  // Skip this scan for this vertex
+                }
+            }
+
+            // Normal consistency check
+            if (useNormalConsistency) {
+                Eigen::Vector3d scanNormal = computeNormalAtClosestPoint(
+                    scans[si]->mesh, cp);
+                double dotProduct = refNormal.dot(scanNormal);
+                if (dotProduct < params.minNormalDotProduct) {
+                    normReject++;
+                    continue;  // Skip this scan for this vertex
+                }
+            }
+
+            // Valid correspondence — include in average
+            sx += cpx;
+            sy += cpy;
+            sz += cpz;
+            validCount++;
+        }
+
+        totalDistanceRejections += distReject;
+        totalNormalRejections += normReject;
+
+        // Update vertex position only if enough valid scans
+        if (validCount >= minValidScans) {
+            double invN = 1.0 / static_cast<double>(validCount);
+            gpaRef.mesh.point(v) = Point3(sx * invN, sy * invN, sz * invN);
+            totalVerticesUpdated++;
+        } else {
+            // Keep original position — insufficient valid coverage
+            totalInsufficientCoverage++;
+        }
+
         if (++vIdx % 10000 == 0 || vIdx == nVerts) {
             int pct = static_cast<int>(100 * vIdx / nVerts);
             std::cout << "\r    Mean mesh: updating " << nVerts
                       << " vertices (" << pct << "%)   " << std::flush;
         }
     }
-    std::cout << " done\n" << std::flush;
+
+    std::cout << "\n    Mean mesh: done\n" << std::flush;
+
+    // Report statistics
+    if (params.verbose && (useDistanceRejection || useNormalConsistency)) {
+        std::cout << "    Mean mesh statistics:\n"
+                  << "      Vertices updated:        " << totalVerticesUpdated
+                  << " / " << nVerts << "\n"
+                  << "      Vertices kept original:  " << totalInsufficientCoverage
+                  << " (insufficient coverage)\n"
+                  << "      Distance rejections:     " << totalDistanceRejections
+                  << " (across all vertices)\n"
+                  << "      Normal rejections:       " << totalNormalRejections
+                  << " (across all vertices)\n" << std::flush;
+    }
 }
 
 } // namespace
 
 // ─── Public mean-mesh update ─────────────────────────────────────────────────
 void updateMeanMesh(ScanData& gpaRef,
-                    const std::vector<std::shared_ptr<ScanData>>& scans)
+                    const std::vector<std::shared_ptr<ScanData>>& scans,
+                    const MeanMeshParams& params)
 {
-    updateToMeanMesh(gpaRef, scans);
+    updateToMeanMesh(gpaRef, scans, params);
 }
 
 // ─── Main GPA entry point ────────────────────────────────────────────────────
@@ -306,7 +486,7 @@ std::shared_ptr<ScanData> compute(
             for (auto v : gpaRef->mesh.vertices())
                 oldPos.push_back(gpaRef->mesh.point(v));
 
-            updateToMeanMesh(*gpaRef, scans);
+            updateToMeanMesh(*gpaRef, scans, params.meanMeshParams);
 
             std::size_t idx = 0;
             for (auto v : gpaRef->mesh.vertices()) {

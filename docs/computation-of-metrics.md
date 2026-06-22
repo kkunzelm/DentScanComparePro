@@ -10,7 +10,7 @@ Both metrics are designed to be consistent with the definitions set out in **ISO
 
 ## 2. Study Design and the Role of the Patient Group
 
-A study consists of one or more **scanners** (e.g., Primescan, Trios 5, Medit i700) and one or more **patient groups**. In a clinical cohort study each group is one patient; in a phantom study each group is one standardised cavity depth level (SKD level). The software processes one patient group at a time. Within each group, every scanner contributes a fixed number of repeated measurements (**repetitions**), typically seven.
+A study consists of one or more **scanners** (e.g., Primescan, Trios 5, Medit i700) and one or more **patient groups**. In a clinical cohort study each group is one patient; in a phantom study each group is one standardised condition for the measurement (i. e. SKD level). The software processes one patient group at a time. Within each group, every scanner contributes a fixed number of repeated measurements (**repetitions**), typically seven.
 
 Each repetition is one complete intraoral scan of the same dentition. The scan is a triangulated surface mesh (STL file) covering the tooth crowns, parts of the gingival margin, and in many cases significant areas of buccal mucosa, alveolar ridge, or palatal tissue that are not relevant to the accuracy evaluation.
 
@@ -18,13 +18,163 @@ Each repetition is one complete intraoral scan of the same dentition. The scan i
 
 ## 3. Reference Surface Construction
 
-### 3.1 The Generalised Procrustes Analysis (GPA) Mean Mesh
+### 3.1 The Reference Mesh: ICP Alignment and Mean Mesh Construction
 
-Before any metric can be computed, a **reference surface** for the patient group must be established. The software constructs this reference using **Generalised Procrustes Analysis (GPA)**.
+Before any metric can be computed, a **reference surface** for the patient group must be established. The software constructs this reference through a two-step process: **rigid alignment** of all scans to a common coordinate frame, followed by computation of a **mean mesh** that represents the consensus geometry.
 
-All scans from all scanners for one patient are rigidly aligned to a common coordinate frame through iterated **Iterative Closest Point (ICP)** registration. After convergence, the reference surface is updated to the **mean mesh**: for each vertex of a nominated reference scan, its position is moved to the arithmetic mean of the closest corresponding surface locations on all aligned scans. The process repeats until the mean mesh no longer moves appreciably. The final result is a triangulated surface that represents the consensus tooth geometry across all scanners and all repetitions for that patient — the best available estimate of the true dental anatomy from the measurement data themselves.
+#### Understanding ICP and GPA
 
-This mean-surface concept is consistent with the intent of ISO 5725-1 clause 3.6, which defines the **accepted reference value** as a value attributed by agreement and sometimes substituted for the true value. Where no external ground truth (e.g., a CAD design file or a laboratory scanner measurement) is available, the GPA mean mesh is the operationally defined reference value.
+**Iterative Closest Point (ICP)** is a pairwise rigid registration algorithm. Given two surface meshes — a source and a target — ICP iteratively:
+1. Finds correspondences by locating the closest point on the target surface for each sampled source point.
+2. Computes the optimal rigid transformation (rotation + translation) that minimises the distances between corresponding points.
+3. Applies the transformation to the source mesh and repeats until the improvement falls below a threshold.
+
+The result is a 4×4 transformation matrix that brings the source mesh into alignment with the target mesh.
+
+**Generalised Procrustes Analysis (GPA)** is a higher-level statistical procedure that uses ICP as a building block. Full GPA operates iteratively:
+
+1. **Select an initial reference mesh** (typically the scan with the most triangles).
+2. **Align all scans to the current reference** using ICP.
+3. **Update the reference to the mean mesh.** This step works as follows: Consider one vertex of the reference mesh — for example, a point on the tip of the upper right canine cusp. After alignment, each of the 28 scans (4 scanners × 7 repetitions) has its own surface representation of that same cusp tip, but the positions differ slightly due to measurement variability. The algorithm finds the point on each scan's surface that is geometrically closest to the reference vertex (the "closest corresponding surface location"). It then computes the arithmetic average of these 28 positions and moves the reference vertex to that average location. This process is repeated for every vertex of the reference mesh. The result is a new reference surface where each point represents the average position across all scans — the **mean mesh**.
+4. **Check convergence**: if the maximum vertex displacement of the mean mesh from the previous iteration is below a threshold (e.g., 0.01 mm), stop; otherwise return to step 2.
+
+The iterative mean-update step is what distinguishes GPA from simple pairwise ICP. Because the reference itself evolves to become the average of all aligned scans, the final mean mesh is not biased toward any single scanner or repetition.
+
+#### Reference Construction Modes in DentScanComparePro
+
+The software supports two modes, selected via the **"pre-aligned"** option in the study configuration:
+
+**Mode A — Full GPA (pre-aligned = false)**
+
+When scans originate from different scanner coordinate systems (e.g., raw exports from Primescan, Trios, and Medit without prior alignment), the software performs:
+
+1. **PCA coarse alignment**: Each scan is centred on its centroid and rotated so that its principal axes align with X/Y/Z. The occlusal direction (high-curvature side) is oriented toward +Z using curvature analysis.
+2. **Z-rotation disambiguation**: The 180° ambiguity left by PCA is resolved by testing 0°, 90°, 180°, 270° rotations around Z and selecting the one with the lowest ICP residual against the initial reference.
+3. **Iterative GPA**: As described above — repeated ICP alignment of all scans followed by mean-mesh update until convergence.
+
+This mode is computationally intensive but handles arbitrary scanner coordinate systems.
+
+**Mode B — ICP Refinement Only (pre-aligned = true)**
+
+When scans have already been pre-aligned (e.g., exported from DentScanAlignPro, or from a phantom study where all scanners use the same coordinate origin), the software skips PCA and the iterative GPA loop. Instead it performs:
+
+1. **Selection of initial reference**: The scan with the most triangles (highest mesh resolution) is chosen as the starting reference.
+2. **ICP refinement**: Each scan is aligned to this reference using point-to-plane ICP. For studies with soft tissue, Trimmed ICP (TrICP) is used to down-weight large residuals from deformable gingiva.
+3. **Single mean-mesh update**: After all scans are aligned, the reference is updated once to the mean mesh (the centroid of corresponding points from all scans).
+
+This mode is faster and avoids the risk of PCA introducing errors when eigenvectors are not axis-aligned. However, it assumes that scans are already approximately aligned before processing.
+
+#### How the Mean Mesh Is Computed
+
+The mean mesh is constructed in two parts:
+
+**Topology (mesh structure):** The triangulation — the number of vertices and how they are connected into triangles — comes from the scan with the **most triangles** in the patient group. This scan serves as a template; its connectivity is preserved unchanged.
+
+**Vertex positions:** Each vertex of this template mesh is moved to the **arithmetic mean of the closest corresponding surface points from all scans in the patient group**. The algorithm proceeds as follows:
+
+1. Build a spatial index (AABB tree) for every scan in the group.
+2. For each vertex `v` of the template mesh, query all scan surfaces to find the closest point on each.
+3. Compute the centroid of these closest points and move `v` to that location.
+
+For example, in a study with 4 scanners × 7 repetitions = 28 scans per patient, each vertex position is computed as:
+
+```
+v_mean = (p₁ + p₂ + ... + p₂₈) / 28
+```
+
+where `pᵢ` is the closest surface point on scan `i` to the original vertex location.
+
+This construction has important properties:
+
+- **All scanners contribute equally** to the reference — no scanner is favoured over another.
+- **All repetitions contribute equally** — no single measurement dominates.
+- **The mean mesh is a true consensus surface**: every scan in the group (including the one that provided the original topology) will show non-zero deviations from this mean. The scan that donated its triangulation is not privileged; its vertices have been moved to the average position.
+
+There is exactly **one reference mesh per patient group** (or per SKD level in a phantom study). This single reference is shared by all trueness and precision computations within that group.
+
+#### Robust Mean Mesh Computation: Handling Holes and Inconsistent Coverage
+
+The simple averaging algorithm described above can produce artifacts when scans have holes or inconsistent coverage. Consider a vertex located in a deep molar fissure:
+
+- Scanner A captures the fissure floor at depth Z = -2 mm
+- Scanner B has a hole (missing data) in the fissure — the closest point query returns a point on the cusp slope at Z = 0 mm
+- Scanner C captures the fissure but at Z = -1.5 mm
+
+A naive average of these three positions pulls the vertex to an intermediate location that lies inside the tooth surface rather than on it. When neighbouring vertices are pulled in inconsistent directions, triangles can fold inward, stretch excessively, or self-intersect.
+
+To prevent these artifacts, the software implements **robust averaging** with three outlier rejection mechanisms:
+
+**1. Distance-based rejection**
+
+For each vertex, the algorithm measures the distance from the vertex position to each scan's closest point. If this distance exceeds a threshold (default: 0.5 mm), the scan is excluded from the average for that vertex. The rationale: if a scan's closest point is far away, the scan likely has a hole at this anatomical location, and the closest point is on a different part of the surface (e.g., a cusp slope instead of the fissure floor).
+
+```
+if distance(vertex, closest_point) > 0.5 mm:
+    skip this scan for this vertex
+```
+
+**2. Normal consistency check**
+
+Even if a closest point is geometrically near, it may lie on a surface facing a completely different direction. For example, when a scan has a hole in an interproximal area, the closest point might be on the buccal surface — which faces outward rather than toward the adjacent tooth.
+
+The algorithm computes the surface normal at the reference vertex and at the scan's closest point. If the dot product of these normals is below a threshold (default: 0.5, corresponding to ~60° deviation), the scan is excluded:
+
+```
+dot_product = reference_normal · scan_normal
+if dot_product < 0.5:
+    skip this scan for this vertex
+```
+
+A dot product of 1.0 means the normals are perfectly aligned; 0.5 allows up to approximately 60° deviation; 0.0 would disable the check entirely.
+
+**3. Minimum valid scans threshold**
+
+After applying the distance and normal checks, some vertices may have very few scans remaining. If too few scans have valid correspondences, the average is unreliable. The algorithm requires a minimum fraction of scans (default: 50%) to have valid data before updating a vertex:
+
+```
+if valid_scan_count < 0.5 × total_scans:
+    keep original vertex position (from template scan)
+else:
+    vertex_position = average of valid closest points
+```
+
+Vertices that fail this check retain their original position from the template scan. This is preferable to computing an unreliable average from only one or two scans.
+
+**Parameter summary**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `maxCorrespondenceDistance` | 0.5 mm | Maximum distance for a closest point to be valid |
+| `minNormalDotProduct` | 0.5 | Minimum normal alignment (~60° max deviation) |
+| `minValidScansFraction` | 0.5 | At least 50% of scans must have valid data |
+
+**Console output and diagnostics**
+
+When robust averaging is active, the software reports statistics:
+
+```
+Mean mesh statistics:
+  Vertices updated:        45230 / 48000
+  Vertices kept original:  2770 (insufficient coverage)
+  Distance rejections:     12450 (across all vertices)
+  Normal rejections:       3200 (across all vertices)
+```
+
+These statistics help identify problematic regions. A high number of "vertices kept original" indicates regions where scan coverage is inconsistent — typically molar fissures, interproximal contacts, and scan boundaries.
+
+**Tuning for specific datasets**
+
+If artifacts persist, the parameters can be adjusted:
+
+- **Tighter distance threshold** (e.g., 0.3 mm): More aggressive rejection of distant correspondences. Use when scans are well-aligned but have small holes.
+- **Stricter normal consistency** (e.g., 0.7): Allows only ~45° deviation. Use when holes cause closest points to land on perpendicular surfaces.
+- **Higher coverage requirement** (e.g., 0.6 or 0.7): Requires more scans to agree before updating a vertex. Use when individual scans have significant local errors.
+
+These parameters are configured in the `MeanMeshParams` structure and can be adjusted programmatically or via study configuration.
+
+#### The Mean Mesh as Accepted Reference Value
+
+This mean-surface concept is consistent with the intent of ISO 5725-1 clause 3.6, which defines the **accepted reference value** as a value attributed by agreement and sometimes substituted for the true value. Where no external ground truth (e.g., a CAD design file or a laboratory scanner measurement) is available, the mean mesh is the operationally defined reference value.
 
 ### 3.2 The ROI Mask Mesh (Per-Patient Crown Region)
 
@@ -34,9 +184,9 @@ Patient intraoral scans are not limited to the tooth crowns. The raw scan surfac
 - are **not clinically relevant** to the dimensional accuracy of crown restorations;
 - introduce large surface deviations that do not reflect scanner performance on tooth surfaces.
 
-To restrict the accuracy evaluation to the **tooth crowns** — the clinically relevant geometry — the operator defines a **ROI mask mesh** for each patient. This is a trimmed copy of the GPA mean mesh containing only the triangles that lie within the chosen region of interest. Typically, the mask covers the occlusal and approximal surfaces of all teeth visible in the scan, from the cusp tips down to approximately 1 mm below the cemento-enamel junction (CEJ).
+To restrict the accuracy evaluation to the **tooth crowns** — the clinically relevant geometry — the operator defines a **ROI mask mesh** for each patient. This is a trimmed copy of the patient-group reference mesh (mean mesh) containing only the triangles that lie within the chosen region of interest. Typically, the mask covers the occlusal and approximal surfaces of all teeth visible in the scan, from the cusp tips down to approximately 1 mm below the cemento-enamel junction (CEJ).
 
-The mask mesh is saved as an independent STL file named `{patientID}_roi_mask.stl`. It has its own vertex set, distinct from the full GPA mean mesh. Let **M** denote the number of vertices in the mask mesh for the current patient. This number is constant across all scans and all scanners within the patient group, because the mask is derived from the single shared reference surface.
+The mask mesh is saved as an independent STL file named `{patientID}_roi_mask.stl`. It has its own vertex set, distinct from the full reference mesh. Let **M** denote the number of vertices in the mask mesh for the current patient. This number is constant across all scans and all scanners within the patient group, because the mask is derived from the single shared reference surface.
 
 ---
 
@@ -54,7 +204,11 @@ The following procedure is executed once per scan (one scanner, one patient, one
 
 #### Step 1 — Rigid alignment of the scan to the reference
 
-Each scan is rigidly registered to the GPA mean reference using ICP. For patient cohort studies with extensive soft tissue, **Trimmed ICP (TrICP)** is used: at each ICP iteration, the point-to-plane residuals of all tentative correspondences are sorted in ascending order and only the best fraction (typically 50 %) are used to solve for the rigid transform. Because tooth surfaces are rigid, they contribute small residuals and are retained; because soft tissue deforms, it contributes large residuals and is discarded. The final transform positions the scan in the same coordinate frame as the GPA mean mesh and the ROI mask mesh.
+Each scan is rigidly registered to the **patient-group reference mesh** — the mean mesh described in Section 3.1. This reference mesh is shared by all scans within one patient group (or one SKD level in a phantom study); it does not change between scanners or repetitions.
+
+The alignment uses **Iterative Closest Point (ICP)** registration. For patient cohort studies with extensive soft tissue, **Trimmed ICP (TrICP)** is used: at each ICP iteration, the point-to-plane residuals of all tentative correspondences are sorted in ascending order and only the best fraction (typically 50 %) are used to solve for the rigid transform. Because tooth surfaces are rigid, they contribute small residuals and are retained; because soft tissue deforms, it contributes large residuals and is discarded.
+
+The final transform positions the scan in the same coordinate frame as the reference mesh and the ROI mask mesh (which is derived from the reference mesh by trimming to the crown region).
 
 #### Step 2 — Distance computation from mask surface to scan surface
 
@@ -95,7 +249,11 @@ RMS is the primary trueness metric. It weights large deviations heavily and is s
 MAD = (1/M) × sum_{k=1}^{M} |d_k|
 ```
 
-MAD gives equal weight to all deviations regardless of sign. It is more robust to a small number of extreme outlier triangles at the scan boundary than RMS. Note that in the CSV output the column is labelled `MAD_mm`; the value is the **mean** absolute deviation, not the median absolute deviation.
+MAD computes the arithmetic mean of the **absolute** distances. Because it uses |d_k| rather than d_k, positive deviations (scan proud of reference) and negative deviations (scan recessed) contribute equally to the metric — a +0.1 mm deviation and a −0.1 mm deviation both add 0.1 mm to the sum. This makes MAD insensitive to the direction of the error; it measures overall magnitude without regard to whether the scanner overestimates or underestimates local tooth dimensions.
+
+Compared to RMS, MAD gives equal weight to all deviations: a 0.2 mm error contributes twice as much as a 0.1 mm error. In contrast, RMS squares the distances before averaging, so large deviations are emphasised (a 0.2 mm error contributes four times as much as a 0.1 mm error). This makes MAD more robust to a small number of extreme outlier triangles at the scan boundary.
+
+Note that in the CSV output the column is labelled `MAD_mm`; the value is the **mean** absolute deviation, not the median absolute deviation.
 
 **Bias (signed mean distance)**
 
@@ -137,12 +295,12 @@ ISO 5725-1 clause 3.7 defines trueness as the closeness between the **mean** of 
 
 | ISO 5725-1 concept | Implementation equivalent |
 |---|---|
-| Accepted reference value | GPA mean mesh trimmed to the ROI mask |
+| Accepted reference value | Mean mesh (reference) trimmed to the ROI mask |
 | Test result (single measurement) | Signed-distance field D at all M mask vertices |
 | Bias (systematic error) | `Bias_mm` = mean(D) |
 | Measure of spread around the reference | `RMS_mm` = sqrt(mean(D²)) |
 
-ISO 12836:2015 section 5.2.3 specifies that trueness is assessed by computing the deviation between the digitised surface and a CMM-measured reference, expressed as "mean error" and "RMS error". Our RMS is precisely the "RMS error" of ISO 12836 when the accepted reference is the GPA mean. When an external reference (CAD file or laboratory scanner measurement) is supplied, the computation is identical but uses the external surface instead of the GPA mean, making the result fully equivalent to the ISO 12836 CMM-reference procedure.
+ISO 12836:2015 section 5.2.3 specifies that trueness is assessed by computing the deviation between the digitised surface and a CMM-measured reference, expressed as "mean error" and "RMS error". Our RMS is precisely the "RMS error" of ISO 12836 when the accepted reference is the mean mesh. When an external reference (CAD file or laboratory scanner measurement) is supplied, the computation is identical but uses the external surface instead of the mean mesh, making the result fully equivalent to the ISO 12836 CMM-reference procedure.
 
 ---
 
@@ -167,7 +325,7 @@ D_i = [d_{i,1}, d_{i,2}, …, d_{i,M}]   for repetition i of scanner S
 D_j = [d_{j,1}, d_{j,2}, …, d_{j,M}]   for repetition j of scanner S
 ```
 
-Both vectors are indexed by the **same M mask vertices** in the same order. This is guaranteed because the mask mesh does not change within a patient group: every scan, regardless of scanner brand, is registered to the same GPA mean mesh, and the mask is a fixed submesh of that reference.
+Both vectors are indexed by the **same M mask vertices** in the same order. This is guaranteed because the mask mesh does not change within a patient group: every scan, regardless of scanner brand, is registered to the same patient-group reference mesh, and the mask is a fixed submesh of that reference.
 
 #### Step 2 — Pairwise surface difference for one scan pair
 
@@ -303,7 +461,7 @@ The effect of the mask on the numeric results is substantial. For the P2026-Nold
 
 ### 8.1 The per-scan row in trueness_metrics.csv
 
-Every scan (one scanner, one patient, one repetition) contributes one row to `trueness_metrics.csv`. The `RMS_mm` value in that row is the trueness of that specific scan against the GPA mean reference for that patient. It is not averaged over repetitions; it is not averaged over patients.
+Every scan (one scanner, one patient, one repetition) contributes one row to `trueness_metrics.csv`. The `RMS_mm` value in that row is the trueness of that specific scan against the patient-group reference mesh (mean mesh). It is not averaged over repetitions; it is not averaged over patients.
 
 ### 8.2 The per-scanner summary
 
@@ -319,7 +477,7 @@ in which `Scanner` is a fixed effect and `Patient_ID` is a random effect. The fi
 
 ### 8.3 Why a simple mean over patients would be misleading
 
-If one patient has a particularly deep cavity or extensive buccal mucosa coverage, their reference-to-scan distances may be systematically larger than for other patients — not because the scanner is less accurate for that patient, but because the GPA mean is less stable when the patient's anatomy is challenging. A simple mean of per-patient RMS values would weight each patient equally regardless of how many valid repetitions they contributed and regardless of the quality of their GPA reference. The mixed-effects model accounts for these imbalances.
+If one patient has a particularly deep cavity or extensive buccal mucosa coverage, their reference-to-scan distances may be systematically larger than for other patients — not because the scanner is less accurate for that patient, but because the mean mesh reference is less stable when the patient's anatomy is challenging. A simple mean of per-patient RMS values would weight each patient equally regardless of how many valid repetitions they contributed and regardless of the quality of their reference mesh. The mixed-effects model accounts for these imbalances.
 
 ---
 
@@ -368,7 +526,7 @@ All formulas below use the notation introduced in the preceding sections: M = nu
 
 ## 11. Limitations
 
-1. **GPA mean as reference**: when no external ground truth is available, the GPA mean is both the reference and a product of the data being evaluated. Systematic biases common to all scanners (e.g., all scanners consistently overcounting the buccal cusp height) will not be visible in the trueness metrics because the reference incorporates that bias. For absolute trueness against a known geometry, an external reference (CAD model or CMM measurement) must be supplied.
+1. **Mean mesh as reference**: when no external ground truth is available, the mean mesh is both the reference and a product of the data being evaluated. Systematic biases common to all scanners (e.g., all scanners consistently overcounting the buccal cusp height) will not be visible in the trueness metrics because the reference incorporates that bias. For absolute trueness against a known geometry, an external reference (CAD model or CMM measurement) must be supplied.
 
 2. **Single-direction distance (mask to scan)**: the signed distance is computed from each mask vertex to the nearest point on the scan surface, not vice versa. This is a directed (asymmetric) distance. For a scan that completely covers the reference region, the directed distance is a good approximation of the true surface deviation. For scans with incomplete coverage (holes, missing segments), the nearest-surface query may find a point far from the intended corresponding location. The coverage rate metric partially captures this.
 
@@ -376,4 +534,101 @@ All formulas below use the notation introduced in the preceding sections: M = nu
 
 4. **Pairwise precision vs. ISO repeatability standard deviation**: as noted in Section 5.3, the pairwise RMS metric equals σ_r × sqrt(2) rather than σ_r directly. Researchers comparing results to published studies that report repeatability SD in ISO 5725-1 notation should apply the sqrt(2) correction.
 
-5. **Patient-specific reference**: in a cohort study each patient has a different GPA mean reference, a different mask, and a different number of mask vertices M. The trueness and precision values from different patients are therefore not computed on identical spatial grids. Comparing raw RMS values across patients requires caution; the mixed-effects model accounts for this by treating patient as a random effect.
+5. **Patient-specific reference**: in a cohort study each patient has a different mean mesh reference, a different mask, and a different number of mask vertices M. The trueness and precision values from different patients are therefore not computed on identical spatial grids. Comparing raw RMS values across patients requires caution; the mixed-effects model accounts for this by treating patient as a random effect.
+
+6. **Mean mesh geometric artifacts (partially mitigated)**: The mean mesh computation can produce geometric artifacts, particularly in anatomically complex regions such as molar fissures and interproximal areas. Two types of artifacts are commonly observed:
+
+   **Stretched or oversized triangles.** The mean mesh preserves the triangulation (connectivity) of the template scan; only vertex positions are updated. When vertices are pulled in inconsistent directions — because different scans have different local geometry or coverage — originally small triangles can become stretched and elongated. Even if the template scan has uniformly small triangles, the averaging process can distort them.
+
+   **Self-intersecting or interior triangles.** Each vertex is moved independently to the average of its closest corresponding points. In regions where scan coverage varies (e.g., one scanner captures a fissure floor while another has a hole there), neighbouring vertices may be pulled in conflicting directions. This can cause triangles to fold inward, intersect with adjacent triangles, or end up inside the mesh shell rather than on the surface.
+
+   These artifacts are most pronounced in:
+   - Deep occlusal fissures, where scanner coverage is inconsistent
+   - Interproximal contact areas, which are difficult for all scanners to capture
+   - Regions where one or more scans have holes or missing data
+
+   **Mitigation:** The software now implements **robust averaging** with outlier rejection (see Section 3.1, "Robust Mean Mesh Computation"). Distance-based rejection, normal consistency checking, and minimum coverage thresholds significantly reduce these artifacts by excluding invalid correspondences from the average. Vertices with insufficient valid coverage retain their original template position rather than being pulled to an unreliable average.
+
+   However, the implementation does not perform mesh repair after averaging. No self-intersection removal, smoothing, or triangle quality optimisation is applied. Residual artifacts may still occur in regions where all or most scans have poor coverage.
+
+   **Impact on metrics:** Because the ROI mask mesh is derived from the mean mesh, artifacts in the mean mesh propagate to the mask. Queries from distorted mask vertices to scan surfaces may produce spurious distance values. However, the effect is typically localised to small regions, and the RMS and MAD metrics — which average over thousands of vertices — are relatively robust to a small number of outlier distances. The sigma-clipping outlier removal (if enabled) further mitigates the impact.
+
+---
+
+## 12. Improvements to Reference Mesh Quality
+
+The mean mesh artifacts described in Section 11.6 are addressed by a combination of implemented features and potential future enhancements.
+
+### 12.1 Outlier-Robust Averaging ✓ IMPLEMENTED
+
+The software implements robust averaging with three rejection mechanisms (see Section 3.1 for full details):
+
+- **Distance-based rejection** ✓: If a closest point is farther than a threshold (default: 0.5 mm) from the current vertex position, exclude it from the average. This prevents vertices from being pulled toward unrelated surface regions when a scan has a hole.
+
+- **Normal consistency check** ✓: If the surface normal at the closest point differs significantly from the reference vertex normal (default: >60° deviation), exclude the correspondence. This catches cases where holes cause closest points to land on surfaces facing different directions.
+
+- **Minimum coverage threshold** ✓: If fewer than a minimum fraction of scans (default: 50%) have valid correspondences for a vertex, keep the original template position rather than computing an unreliable average.
+
+These mechanisms are controlled by the `MeanMeshParams` structure with configurable parameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `maxCorrespondenceDistance` | 0.5 mm | Maximum distance for valid correspondence |
+| `minNormalDotProduct` | 0.5 | Minimum normal alignment (~60° max deviation) |
+| `minValidScansFraction` | 0.5 | At least 50% of scans must have valid data |
+
+**Not yet implemented** from this category:
+- Trimmed mean (discard top/bottom 10% before averaging)
+- Geometric median instead of arithmetic mean
+
+### 12.2 Coverage-Based Weighting (Partially Implemented)
+
+The current implementation uses binary weighting: a scan either contributes fully (weight = 1) or is excluded entirely (weight = 0) based on the distance and normal checks. More sophisticated continuous weighting could further improve quality:
+
+- Scans with a hole near the vertex position contribute zero weight. ✓ **Implemented** via distance rejection.
+- Scans with grazing-angle triangles (nearly parallel to the query direction) contribute reduced weight. ✓ **Partially implemented** via normal consistency check.
+- Scans with high local curvature consistency contribute higher weight. **Not yet implemented.**
+
+Full coverage-based weighting would require computing local coverage and quality metrics for each scan, which adds computational cost but could improve robustness in regions with variable scan quality.
+
+### 12.3 Post-Averaging Mesh Repair (Not Yet Implemented)
+
+After computing the mean mesh, mesh repair operations could further improve quality. These are **not yet implemented** but represent potential future work:
+
+- **Self-intersection removal**: Detect and resolve triangles that intersect each other. CGAL provides algorithms for this (e.g., `CGAL::Polygon_mesh_processing::remove_self_intersections`).
+- **Smoothing / fairing**: Apply Laplacian smoothing or curvature-flow fairing to reduce high-frequency noise and improve triangle quality. This must be done carefully to avoid shrinking or distorting the surface.
+- **Re-meshing**: Generate a new triangulation with uniform triangle size and good aspect ratios. Isotropic remeshing algorithms (e.g., `CGAL::Polygon_mesh_processing::isotropic_remeshing`) can produce a cleaner mesh at the cost of losing the original vertex correspondence.
+
+Note: The robust averaging implemented in Section 12.1 significantly reduces the need for post-processing mesh repair by preventing most artifacts at the source.
+
+### 12.4 Correspondence Improvement (Partially Implemented)
+
+The basic "closest point" correspondence is purely geometric and can match unrelated surface regions when scans have holes. The following methods improve correspondence quality:
+
+- **Normal consistency** ✓ **IMPLEMENTED**: Reject closest points whose surface normal differs significantly from the reference vertex normal. The implementation computes the dot product between normals and rejects correspondences below a configurable threshold (default: 0.5, allowing up to ~60° deviation).
+
+- **Distance rejection** ✓ **IMPLEMENTED**: Reject closest points that are too far from the reference vertex, indicating the scan has a hole at this location.
+
+- **Geodesic consistency**: Use geodesic distance on the surface to verify that correspondences are locally consistent. **Not yet implemented.**
+
+- **Feature-based correspondence**: Identify anatomical landmarks (cusp tips, fissure endpoints) and use them to guide dense correspondence. **Not yet implemented.**
+
+### 12.5 Iterative Refinement with Quality Checks (Partially Addressed)
+
+The original proposal was to extend GPA iteration to include mesh quality checks:
+
+1. After each mean-mesh update, detect self-intersections and large triangles.
+2. For vertices involved in problematic triangles, recompute the average using only the subset of scans that have valid local coverage.
+3. Continue iterating until both the vertex displacement and the number of problematic triangles converge.
+
+**Current status:** Step 2 is partially addressed by the minimum coverage threshold — vertices with insufficient valid scans retain their original position rather than being updated with unreliable data. However, the implementation does not currently detect self-intersections or large triangles and does not iterate to resolve them.
+
+### 12.6 Alternative Reference Construction (Available)
+
+For studies where mean mesh artifacts remain problematic despite robust averaging, alternative reference construction strategies are available:
+
+- **External reference** ✓ **SUPPORTED**: Use a laboratory scanner (e.g., structured-light desktop scanner) or CAD model as the reference. This avoids the mean mesh entirely. The software supports loading an external reference STL file via the `external_reference` configuration option.
+
+- **Best-scan reference**: Instead of averaging, select the single scan with the highest overall quality (fewest holes, best triangle quality) as the reference. This preserves a clean mesh but introduces bias toward that scanner. **Not directly supported**, but can be achieved by setting `fixed_reference_scanner` in the configuration.
+
+- **Hybrid approach**: Use the mean mesh for most of the surface, but replace artifact-prone regions (detected automatically) with geometry from the best-quality scan in that region. **Not yet implemented.**
