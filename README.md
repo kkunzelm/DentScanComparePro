@@ -8,7 +8,7 @@ Based on the core algorithms from [DentScanCompare](../DentScanCompare/), extend
 - JSON-driven batch configuration with generic group IDs
 - Automated file discovery via glob patterns with scanner ID matching
 - Per-group GPA alignment with incremental save/resume
-- **Per-patient ROI templates**: each patient group carries its own ROI definition (selected interactively in the ROI Template Editor, saved as JSON + ROI mask STL, auto-linked in the study config via patient ID inferred from the STL filename)
+- **Per-patient ROI templates**: each patient group carries its own ROI mask STL. A dedicated **ROI Masks Directory** holds mask files named `{groupId}_roi_mask.stl`. The batch runner auto-discovers the correct mask per patient — no per-group entries needed in the study JSON.
 - Quality Control (QC) workflow with visual verification and re-registration
 - CSV output for statistical analysis (R, SPSS, etc.)
 
@@ -52,7 +52,7 @@ serve different use cases:
 - JSON configuration for scanners, groups (SKD levels, patients, or any label), and output paths
 - Automatic file discovery via glob patterns with scanner ID matching
 - Incremental save after each group (resume after interruption)
-- Progress tracking via `.batch_progress.json`
+- Progress tracking via `batch_progress.json`
 
 ### Quality Control (QC) Workflow
 - Export GPA mean meshes (STL), transform matrices (JSON), segmented meshes
@@ -76,7 +76,7 @@ serve different use cases:
 ### Integration
 - Load pre-computed transforms from DentScanAlign
 - ROI templates: any active geometric component (bounding box, plane slab, brush zones) is applied to the **reference mesh once** to create a trimmed submesh; all source scans then align to that masked reference via standard ICP. This makes ROI-restricted alignment robust to inter-scanner offsets — source scans use their full geometry during alignment. Tooth segmentation seeds additionally filter metric computation per scan.
-- **Per-patient ROI**: in clinical studies each patient group carries its own ROI template JSON + mask STL. Workflow: (1) run one batch without ROI to generate `qc/reference_meshes/<id>_reference.stl` per patient; (2) in the ROI Template Editor, Browse → load each patient's reference STL, draw the mask (Plane Slab + Brush Exclude recommended), click Save Template — the software infers the patient ID from the filename and records `roi_template_file` in the study JSON automatically; (3) repeat for all patients; (4) enable "Use ROI mask" and run the batch. `GroupProcessor` loads the per-group template at runtime, overriding any study-wide template. When no global template is set but per-group templates exist, the batch log shows: `Masked ICP: no global template — using per-group ROI templates (N/N groups configured)`.
+- **Per-patient ROI**: in clinical studies each patient needs an individual ROI mask STL. Workflow: (1) set **ROI Masks Dir** in the Study Configuration tab (a permanent directory, independent of the batch output directory); (2) run one batch without ROI to generate `qc/reference_meshes/<id>_reference.stl` per patient; (3) in the ROI Template Editor, Browse → load each patient's reference STL, draw the mask (Plane Slab + Brush Exclude recommended), click Save Template — the mask STL is written to `{maskStlDir}/{groupId}_roi_mask.stl` automatically; (4) repeat for all patients; (5) enable "Use ROI mask" and run the batch. `BatchRunner` auto-discovers each mask from the directory by naming convention before calling `GroupProcessor`.
 - External reference support (CAD or lab scanner STL)
 
 ---
@@ -150,6 +150,7 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
 {
   "study": { "name": "P2026-Nold", "version": 1, "reference_strategy": "gpa_mean",
              "scans_normalized": true,
+             "mask_stl_directory": "/path/to/roi_masks",
              "alignment": { "icp_trim_fraction": 0.5 } },
   "scanners": [
     {"id": "Carestream3700", "patterns": ["Carestream3700*"]},
@@ -158,8 +159,8 @@ The `group.id` field is a free-form string label — use SKD values for phantom 
     {"id": "Trios3",         "patterns": ["Trios3*"]}
   ],
   "groups": [
-    {"id": "002", "file_patterns": ["*_002_*_aligned.stl"], "roi_template_file": "roi/002_roi_template.json"},
-    {"id": "003", "file_patterns": ["*_003_*_aligned.stl"], "roi_template_file": "roi/003_roi_template.json"}
+    {"id": "002", "file_patterns": ["*_002_*_aligned.stl"]},
+    {"id": "003", "file_patterns": ["*_003_*_aligned.stl"]}
   ],
   "output": {
     "base_dir": "./results_P2026_Nold",

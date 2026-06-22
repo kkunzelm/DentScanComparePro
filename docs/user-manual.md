@@ -134,7 +134,7 @@ During metric computation, three filters are applied in sequence. A vertex must 
 | **2. Distance guard (5 mm)** | Any vertex whose absolute distance to the masked reference exceeds 5 mm is excluded. | Belt-and-suspenders check for vertices that somehow passed filter 1 but are clearly far from the analysis region. |
 | **3. Tooth segmentation mask** | If tooth seeds were placed and segmentation was run, only vertices identified as crown surfaces pass. | Fine-grained exclusion of inter-proximal and cervical soft tissue that the geometric ROI did not cleanly cut off. |
 
-**What the difference PLY files show:** The PLY files written to `qc/difference_meshes/` contain the full scan geometry. Vertices inside the ROI are coloured by their signed distance value (blue = scan surface is recessed, red = scan is proud, white = on-reference). Vertices outside the ROI are shown in white/neutral (distance zeroed before writing) so they do not appear as coloured outliers. Open these files in MeshLab (*Render → Color → Per-Vertex Quality*) to inspect the spatial distribution of trueness errors within the analysis region.
+**What the difference PLY files show:** In the mask STL path, the PLY files written to `qc/difference_meshes/` contain **only the mask mesh geometry** (the ROI-trimmed reference surface), colored by the distance from each reference surface point to the nearest point on the scan. This is identical to the `maskDistances` values that feed the trueness metrics: positive = scan surface is proud (outside the reference), negative = scan is recessed. There is no outside-mask geometry in the file at all — no boundary band, no misleading colors. Open these files in MeshLab (*Render → Color → Per-Vertex Quality*) to inspect the spatial distribution of trueness errors within the analysis region. In the full-mesh or ROI-trimmed-reference path (no mask STL), the PLY contains the full aligned scan geometry colored per scan vertex.
 
 **Why the split between reference-side and source-side masking?** The geometric ROI coordinates (bounding box corners, plane origin) are defined in the reference coordinate frame. Applying them to the reference once is always correct. Applying the same coordinates to a source scan that has not yet been aligned would fail if the scanner uses a different origin — the box would miss the scan entirely. After ICP alignment, the source scan is in the reference coordinate frame, so the ROI coordinates apply correctly to its vertices. The software therefore applies the ROI to the reference first (for ICP alignment focus) and re-applies it to each source scan after alignment (for metric filtering).
 
@@ -250,19 +250,37 @@ The stencil is defined interactively on the **reference mesh** of each patient (
 #### Two-step process overview
 
 ```
+Step 0  Set ROI Masks Dir in the Study Configuration tab
+        → A permanent directory for all per-patient mask files
+
 Step A  Run batch once WITHOUT any ROI mask
         → Software creates reference_meshes/ folder with one STL per patient
 
 Step B  For each patient (one at a time):
         → Load that patient's reference STL in the ROI Template Editor
         → Draw the ROI mask (exclude gingiva, include teeth)
-        → Save the template  (software records it in the study config file)
+        → Save the template
+          (mask STL written to {maskStlDir}/{groupId}_roi_mask.stl automatically)
 
 Step C  Run batch again WITH "Use ROI mask" checked
-        → Each patient's own ROI mask is loaded and applied automatically
+        → BatchRunner auto-discovers {groupId}_roi_mask.stl for each patient
+        → Each patient's own mask is applied automatically
 ```
 
-You only need to do Steps A and B once. After all per-patient masks are saved, you can run Step C (and re-run it if needed) as many times as you like.
+You only need to do Steps 0, A, and B once. After all per-patient masks are saved to the masks directory, you can run Step C (and re-run it if needed) as many times as you like.
+
+> **Why a separate masks directory?** Mask STL files must survive between batch runs. If they were stored inside the batch output directory, clearing that directory for a fresh run would destroy all your ROI work. The ROI Masks Directory is a permanent location independent of any batch output.
+
+---
+
+#### Step 0 — Set the ROI Masks Directory (do this once, before anything else)
+
+1. Go to the **Study Configuration** tab.
+2. Find the **"ROI Masks Dir:"** field (below the External Ref field).
+3. Click **Browse...** and choose — or create — a permanent directory for your mask files. A good location is a folder like `roi_masks/` next to your study JSON file, **not** inside the batch output directory.
+4. Click **Save Configuration** (or load a study JSON that already has `mask_stl_directory` set) — the path is stored in the study JSON so it persists across sessions.
+
+> **The masks directory must not be the batch output directory.** Clearing the batch output for a fresh run would destroy your mask files. Keep them in a separate, permanent location.
 
 ---
 
@@ -369,13 +387,14 @@ How to use it:
 ##### Save the template for this patient
 
 8. Once you are satisfied with the ROI for this patient, click **"Save Template..."** in the **ROI Template I/O** section.
-9. A file dialog opens. The suggested filename is based on the loaded STL name (e.g. `002_reference_roi-mask.json`). Save it inside a convenient location — the same `qc/reference_meshes/` folder works well, or a dedicated `roi/` subfolder next to your study config file.
-10. The software does three things automatically when you click Save:
-    - It writes the ROI template as a JSON file (e.g. `002_reference_roi-mask.json`). This file contains all the ROI settings: the bounding box dimensions, the plane definition, the brush zones, and the tooth segmentation seeds.
-    - It writes an ROI mask STL (e.g. `002_reference_roi-mask_roi_mask.stl`). This STL contains only the triangles of the reference mesh that fall inside the ROI. You can open this file in MeshLab or any STL viewer to verify visually that the correct region is included.
-    - It reads the patient ID from the filename (the digits before the first underscore, e.g. `002` from `002_reference_roi-mask.json`) and records the path to this JSON file in the study configuration file (the `roi_template_file` field for group `002`). This is how the batch run will later find the correct ROI mask for each patient.
+9. A file dialog opens. The suggested filename is based on the patient ID inferred from the loaded STL name and defaults to the ROI Masks Directory you set in Step 0 (e.g. `/path/to/roi_masks/002_roi_mask.stl`). Accept the suggested path — the exact filename `{groupId}_roi_mask.stl` is what the batch runner expects.
+10. The software does two things automatically when you click Save:
+    - It writes the **ROI template as a JSON file** alongside the STL. This JSON contains the full ROI definition (bounding box, plane definition, brush zones, tooth segmentation seeds) so you can reload and edit it later.
+    - It writes the **ROI mask STL** — named `{groupId}_roi_mask.stl` (e.g. `002_roi_mask.stl`) — to the ROI Masks Directory. This STL contains only the triangles of the reference mesh that fall inside the ROI. The batch runner will load this file directly when processing patient `002`.
 
 > **How to verify the ROI mask STL:** Open the `_roi_mask.stl` file in MeshLab. You should see only the tooth surfaces, without gingiva or scan borders. If soft tissue is still visible, go back into the ROI Template Editor and add more Brush Exclude zones, then save again (the files are overwritten).
+
+> **Important: the filename must match the group ID exactly.** The batch runner looks for `{groupId}_roi_mask.stl` in the masks directory, where `{groupId}` is the `id` field in your study JSON (e.g. `002`, `003`, …). If you rename or move the file, update the path accordingly.
 
 ---
 
@@ -383,7 +402,7 @@ How to use it:
 
 11. In the ROI Template Editor, click **Browse...** again and load the next patient's reference STL (e.g. `003_reference.stl`). All ROI settings reset to blank automatically when you load a new file. This ensures that the settings from patient 002 do not carry over to patient 003.
 12. Repeat the definition and save steps for this patient.
-13. Continue until all patients have a saved ROI template. You can verify which patients are done by opening the study configuration JSON in a text editor — each completed patient group will have a `"roi_template_file": "path/to/..."` entry.
+13. Continue until all patients have a saved ROI mask STL. You can verify which patients are done by listing the contents of your ROI Masks Directory — you should see one `{groupId}_roi_mask.stl` file per patient group (e.g. `002_roi_mask.stl`, `003_roi_mask.stl`, …).
 
 ---
 
@@ -393,15 +412,15 @@ How to use it:
 2. Check the **"Use ROI mask for registration (masked ICP)"** checkbox. This must be checked for the per-patient ROI masks to be applied.
 3. Click **Run Batch Processing**.
 
-In the batch log, you will see a message like:
+In the batch log, for each group you will see a line like:
 
 ```
-Masked ICP: no global template — using per-group ROI templates (16/16 groups configured)
+    Mask STL (dir lookup): /path/to/roi_masks/002_roi_mask.stl
 ```
 
-This confirms that the software found a per-patient ROI template for every group and will apply the correct mask for each patient individually. If the number shown is less than the total number of groups (e.g. `14/16`), it means two patients do not yet have a saved ROI template — go back to Step B and define the missing ones before re-running.
+This confirms the batch runner found and loaded the mask for that patient. If a patient's mask is missing, the batch runner falls back to full-mesh processing for that group and logs a warning — it does not fail the entire batch.
 
-> **Note:** You do not need to select a global ROI template file anywhere. The per-patient templates are linked directly in the study configuration file by the Save Template action you performed in Step B. The global ROI Template field in the Study Configuration tab can be left empty when using per-patient masks.
+> **Note:** You do not need to select a global ROI template file anywhere. The batch runner discovers masks automatically from the ROI Masks Directory by naming convention. The global ROI Template field in the Study Configuration tab can be left empty when using per-patient masks.
 
 ---
 
@@ -409,13 +428,14 @@ This confirms that the software found a per-patient ROI template for every group
 
 | Step | Action | Done when… |
 |------|--------|------------|
+| 0 | Set ROI Masks Dir in Study Configuration tab | Path saved to study JSON as `mask_stl_directory` |
 | A | Run batch without ROI | `qc/reference_meshes/` folder contains one `*_reference.stl` per patient |
 | B1 | Load study config | Study Configuration tab shows all groups |
 | B2 | For each patient: Browse → load `<id>_reference.stl` | 3D mesh appears in viewport, all ROI controls reset |
 | B3 | Define ROI (Plane Slab + Brush Exclude recommended) | Green/dark mask in viewport looks correct |
-| B4 | Save Template | JSON and mask STL files written; study config updated |
-| B5 | Repeat B2–B4 for all patients | All patient groups have `roi_template_file` in study JSON |
-| C | Check "Use ROI mask" checkbox and run batch | Log shows `using per-group ROI templates (N/N groups configured)` |
+| B4 | Save Template (accept default path in masks dir) | `{groupId}_roi_mask.stl` written to masks directory |
+| B5 | Repeat B2–B4 for all patients | Masks directory contains one `{id}_roi_mask.stl` per patient |
+| C | Check "Use ROI mask" checkbox and run batch | Batch log shows `Mask STL (dir lookup): …` for each patient |
 
 ---
 
@@ -602,7 +622,7 @@ See **Appendix A — Output CSV Reference** for a full description of every colu
 | `qc/reference_meshes/<group>_reference.stl` | Full GPA mean or external reference mesh (one per group) |
 | `qc/reference_meshes/<group>_roi.stl` | ROI-trimmed reference submesh used for ICP and distance computation (only when a geometric ROI is active). Load alongside aligned scans to verify the ROI lands on the intended region. |
 | `qc/aligned_meshes/<scan>.stl` | Each scan's geometry after ICP, in the GPA frame. Open in any STL viewer to check that scans actually land on top of each other. |
-| `qc/difference_meshes/<scan>.ply` | Same aligned geometry as binary PLY with a per-vertex `distance` float scalar (signed mm to reference). Open in MeshLab (*Render → Color → Per-Vertex Quality*) or ParaView to inspect the spatial distribution of errors. |
+| `qc/difference_meshes/<scan>.ply` | Binary PLY with a per-vertex `distance` float scalar (signed mm, positive = scan proud, negative = recessed). **Mask STL path**: the PLY contains the mask mesh geometry colored by `maskDistances` — only the ROI region, no boundary band. **Full-mesh / ROI path**: the PLY contains the aligned scan geometry colored per scan vertex. Open in MeshLab (*Render → Color → Per-Vertex Quality*) or ParaView. |
 | `qc/transforms/<scan>.json` | Transform matrix + metrics (JSON per scan) |
 | `qc/segmented/` | Tooth-only meshes (when Base Selection is used) |
 | `qc/difference_images/` | Color-coded distance maps (PNG, generated in QC tab) |
@@ -976,6 +996,12 @@ For detailed metric interpretation, see **docs/metric-interpretation.md**.
 | **CV** | Coefficient of Variation (SD/Mean) |
 | **Pairwise Count** | Number of scan pairs compared |
 
+**How pairwise RMS is computed** depends on the active workflow:
+
+- **Mask STL path** (patient studies with per-patient ROI masks): for each pair of repetitions (scan_i, scan_j) of the same scanner, the pairwise RMS is `sqrt(mean_k((d_i[k] − d_j[k])²))` where `d[k]` is the signed distance from mask vertex k to the nearest point on the scan surface — the same values used for trueness. This is consistent: both metrics operate on identical mask-vertex distances, so precision and trueness are directly comparable.
+
+- **Full-mesh / geometric ROI path** (phantom studies): for each pair, the RMS of scan_i vertex distances to the scan_j surface (AABB tree query). The geometric ROI (bbox, plane slab, brush zones) is applied as a vertex filter.
+
 ---
 
 ## Pipeline Stages
@@ -996,7 +1022,7 @@ The batch processor executes these stages for each SKD group:
    - **ICP hierarchy** (`use_icp_hierarchy`): coarse-to-fine ICP at 5%/20%/100% face decimation. Each coarse level runs to convergence and seeds the next finer level — avoids local minima from large initial offsets.
 6. **Compute distances** - CGAL AABB-tree signed distances to the ROI-masked (or full) reference
 7. **Compute trueness metrics** - RMS, MAD, Hausdorff, coverage, completeness. Three filters applied in sequence: (1) source-side geometric ROI mask re-applied to the aligned scan vertex positions — primary soft-tissue exclusion; (2) distance guard: vertices more than 5 mm from the masked reference excluded; (3) tooth segmentation mask, if active. Only vertices passing all three filters contribute to the CSV numbers.
-8. **Compute precision metrics** - Pairwise comparisons between repetitions (skipped when `compute_precision: false`)
+8. **Compute precision metrics** - Pairwise comparisons between repetitions per scanner (skipped when `compute_precision: false`). In the mask STL path: reuses existing `maskDistances` arrays — `pairRMS(i,j) = sqrt(mean((d_i − d_j)²))` over mask vertices, consistent with trueness. In the fallback path: AABB tree query, scan_i vertices to scan_j surface.
 9. **Export QC data** - GPA means, ROI reference, aligned STLs, difference PLYs, transforms, segmented meshes
 
 ---
@@ -1052,7 +1078,7 @@ If batch processing is interrupted:
 ./DentScanComparePro --batch --study study.json --data-root data/ --output results/
 ```
 
-Progress is tracked in `.batch_progress.json` in the output directory.
+Progress is tracked in `batch_progress.json` in the output directory.
 
 ---
 
@@ -1106,7 +1132,7 @@ DentScanComparePro v1.0
 
 This appendix documents every CSV file that DentScanComparePro writes to the output directory, what data each file contains, and when it is generated or overwritten.
 
-All CSV files are written with a UTF-8 BOM so that they open correctly in Microsoft Excel on Windows without any import dialog.
+All CSV files are written as plain UTF-8 without a byte-order mark (BOM) and open correctly in LibreOffice Calc on Linux and in Microsoft Excel 2016+ on Windows.
 
 ---
 
@@ -1175,7 +1201,15 @@ In practice, once you have run QC review and rebuilding, `trueness_metrics.csv` 
 
 **When written:** After batch processing (by the batch runner) and after every **Rebuild Metrics from Transforms** operation.
 
-**What it contains:** One row per Scanner × Group cell. Each row summarises the **within-cell pairwise precision** — how consistent the same scanner is across repeated measurements under the same conditions. Precision is computed as the mean of all pairwise RMS distances between the N repetitions in the cell. For N = 5 repetitions, this involves 10 unique scan pairs.
+**What it contains:** One row per Scanner × Group cell. Each row summarises the **within-cell pairwise precision** — how consistent the same scanner is across repeated measurements under the same conditions.
+
+For N = 7 repetitions there are N×(N−1)/2 = 21 unique pairs. Each pair contributes one pairwise RMS value. The row reports the mean, SD, and CV of those 21 values.
+
+**How the pairwise RMS for one pair is computed:**
+
+- **Mask STL path** (per-patient ROI masks, e.g. P2026-Nold): `pairRMS = sqrt(mean_k((d_i[k] − d_j[k])²))` where `d[k]` is the signed distance from mask vertex k to the scan surface. Both scans in the pair use the same mask mesh, so the distances are indexed at the same spatial locations. This is consistent with the trueness RMS — both metrics use identical `maskDistances` values, just combined differently.
+
+- **Full-mesh / geometric ROI path** (phantom studies): for each scan_i vertex inside the geometric ROI, find its distance to the scan_j surface (AABB tree). `pairRMS = sqrt(mean(d²))` over those vertices.
 
 Scans in Errand status are excluded from all pair computations. If an errand is unresolved in a cell with 5 repetitions, that cell has only 4 valid scans and therefore only 6 pairs; the Pairwise_Count column reflects this.
 

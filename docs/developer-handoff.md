@@ -297,7 +297,7 @@ std::vector<bool> toothMask = ToothSegmentation::segmentFromPoints(scan, seedPoi
 The batch processor saves results incrementally after each condition group completes:
 
 - **Automatic resume**: If the batch is interrupted, simply re-run the same command. Already-completed groups are skipped automatically.
-- **Progress tracking**: A `.batch_progress.json` file in the output directory tracks completed groups and the current observation ID.
+- **Progress tracking**: A `batch_progress.json` file in the output directory tracks completed groups and the current observation ID.
 - **Incremental CSV**: Trueness and precision CSVs are appended to after each group (not rewritten from scratch).
 - **Safe interruption**: Progress is saved before exiting on cancel, so no work is lost.
 - **Clean completion**: The progress file is automatically deleted when all groups complete successfully.
@@ -1200,6 +1200,69 @@ Computing pairwise distances...... done (M pairs)
 - `src/qc/QCReviewWidget.cpp` - Double-click emits viewRequested signal
 - `src/gui/MainWindow.cpp` - Wire up AlignmentQCDialog
 - `src/CMakeLists.txt` - Added new source files
+
+### 2026-06-22 – ROI Masks Directory, PLY visualization fix, CSV BOM removal, progress file rename
+
+#### ROI Masks Directory (`maskStlDirectory`)
+
+**Problem:** The previous per-patient workflow saved ROI template JSON and mask STLs into the batch output directory, a transient directory that gets deleted between runs. When the output directory was cleared, all per-patient ROI work was lost.
+
+**Fix:** A permanent `maskStlDirectory` field was added to `StudyConfig`. The directory holds per-group mask STLs named `{groupId}_roi_mask.stl`. `BatchRunner` looks up the mask for each group from this directory before calling `GroupProcessor::process()`, filling `groupWithMask.roiMaskStlPath` automatically when the per-group path is empty.
+
+**Code path:** When `group.roiMaskStlPath` is non-empty, `GroupProcessor::process()` sets `useMaskStl = true`. This path loads the STL directly as the trimmed reference mesh, bypassing all geometric ROI config fields (bbox, z-plane, brush zones). Distances are computed as mask→scan (`maskDistances`); `distanceToRef` (scan→mask) is used only for QC PLY visualization.
+
+**Configuration:**
+- `StudyConfig::maskStlDirectory` (`src/config/StudyConfig.h`)
+- JSON key: `study.mask_stl_directory` (nested under the `"study"` object)
+- GUI: "ROI Masks Dir:" row in Study Configuration tab (`m_maskStlDirEdit`)
+- `BatchRunner.cpp`: directory fallback lookup before each group's `processor.process()` call
+
+**Save Template behavior change:** `saveROITemplate()` now defaults the mask STL save path to `{maskStlDir}/{groupId}_roi_mask.stl` (inferred from loaded STL basename) when `maskStlDir` is set and exists. The ROI template JSON is still saved alongside for re-loading in the editor.
+
+#### PLY visualization fix (difference meshes)
+
+**Problem:** `qc/difference_meshes/*.ply` files showed red/blue coloring on triangles outside the mask region. Root cause: `maskTree.computeDistances(*scan)` fills `distanceToRef` for ALL scan vertices (not just those in the mask region). Vertices outside the mask showed their distance to the nearest mask boundary, which can be several mm — producing misleading coloring in MeshLab.
+
+**Fix:** Before `exportQCData()`, when `useMaskStl` is true, the code computes the 99th percentile of `|maskDistances|` + 1 mm safety margin and zeroes out any `distanceToRef[i]` above that threshold. Vertices outside the mask area appear white/neutral in MeshLab; only the mask-covered area shows the signed-distance color map. Metrics (which use `maskDistances`) are unaffected.
+
+**Location:** `src/batch/GroupProcessor.cpp`, in the QC export section after `computeTruenessMetrics()` and before the `exportQCData()` call.
+
+#### CSV BOM removal
+
+**Problem:** All CSV files were written with a UTF-8 BOM (`\xEF\xBB\xBF` = 3 bytes) for "Windows Excel compatibility". LibreOffice Calc on Linux does not handle this transparently; it displayed the 3 bytes as garbled characters at the start of the first cell.
+
+**Fix:** Removed `writeBOM()` function from `CSVWriter.h/.cpp` entirely. Removed all 5 `writeBOM(file);` call sites. CSVs now open cleanly in both LibreOffice and Excel (Excel on Windows handles UTF-8 without BOM since Excel 2016).
+
+#### `batch_progress.json` — renamed (no longer hidden), Resume/Start Fresh dialog
+
+**Change:** Progress file renamed from `.batch_progress.json` to `batch_progress.json` (removed leading dot). Hidden files are harder to discover and delete when a user wants to start fresh.
+
+**Resume dialog:** When an existing `batch_progress.json` is found at batch start, a `QMessageBox` is shown with "Resume" and "Start Fresh" buttons. The default button is **Start Fresh** (to prevent accidental group skipping). If the user picks Start Fresh, the progress file is deleted and the batch begins from group 1.
+
+#### Precision metric consistency fix (mask STL path)
+
+**Problem:** `computePrecisionMetrics()` always used the full-mesh scan-to-scan AABB approach (build AABB tree for scan_j, query scan_i vertices). In the mask STL path the geometric ROI passed to `computeROIMask()` has no active components, so precision was effectively computed over the full scan mesh — inconsistent with trueness which uses only `maskDistances` (mask-vertex distances).
+
+**Fix:** Added `useMaskPath` branch at the top of the scanner loop. When any scan in the group has non-empty `maskDistances`, the mask path is taken:
+
+```
+pairRMS(i, j) = sqrt(mean_k((maskDistances_i[k] - maskDistances_j[k])²))
+```
+
+All scans in a group share the same mask mesh (same M vertices), so the arrays are parallel and can be subtracted element-wise. No AABB trees are constructed; the loop is O(pairs × M). Trueness and precision now both derive from the same `maskDistances` arrays.
+
+**Files changed (2026-06-22):**
+- `src/config/StudyConfig.h` — `maskStlDirectory` field
+- `src/config/StudyConfig.cpp` — `load/saveToJSON` for `mask_stl_directory`
+- `src/gui/MainWindow.h` — `m_maskStlDirEdit`, `browseMaskStlDir()` slot
+- `src/gui/MainWindow.cpp` — "ROI Masks Dir:" UI row, `browseMaskStlDir()`, `loadStudyConfig()` sync, `saveROITemplate()` default path
+- `src/batch/BatchRunner.cpp` — directory fallback lookup, progress file rename
+- `src/batch/GroupProcessor.cpp` — PLY mask-mesh path; precision mask-path branch
+- `src/batch/CSVWriter.h/.cpp` — `writeBOM()` removed
+- `src/core/Mesh.h` — `plyMesh` field in `ScanData`
+- `src/qc/QCExporter.cpp` — `exportDifferencePLY` uses `plyMesh + maskDistances` when set
+
+---
 
 ### 2026-06-21 – Per-patient ROI templates for clinical studies
 

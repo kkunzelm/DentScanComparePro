@@ -50,6 +50,12 @@ struct ScanData {
     // to nearest point on this scan surface. Empty when no mask STL is used.
     std::vector<double> maskDistances;
 
+    // --- PLY visualization mesh (mask STL path only) ---
+    // When set, exportDifferencePLY writes this mesh colored by maskDistances instead
+    // of the scan mesh colored by distanceToRef. The mask mesh contains only the ROI
+    // region, so the PLY has no outside-mask geometry and no boundary band artefact.
+    std::shared_ptr<SurfaceMesh> plyMesh;
+
     // --- cached stats (filled on load) ---
     std::size_t triangleCount = 0;
     std::array<double, 3> boundsMin{};

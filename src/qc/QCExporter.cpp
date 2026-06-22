@@ -286,13 +286,24 @@ bool QCExporter::exportDifferencePLY(
     const QString& filename,
     double colorRangeMax)
 {
-    if (!scan || !scan->distanceComputed || scan->mesh.is_empty()) return false;
+    if (!scan) return false;
 
     QDir dir(outputDir);
     if (!dir.exists("qc/difference_meshes"))
         dir.mkpath("qc/difference_meshes");
 
     QString fullPath = outputDir + "/qc/difference_meshes/" + filename + ".ply";
+
+    // Mask STL path: write the mask mesh colored by maskDistances so the PLY
+    // contains only the ROI region (no outside-mask geometry, no boundary band).
+    if (scan->plyMesh && !scan->maskDistances.empty()) {
+        return writeBinaryPLY(*scan->plyMesh, scan->maskDistances, "distance",
+                              fullPath, colorRangeMax);
+    }
+
+    // Fallback (ROI-trimmed reference or full-mesh path): write scan mesh colored
+    // by distanceToRef (scan vertex → reference surface).
+    if (!scan->distanceComputed || scan->mesh.is_empty()) return false;
     return writeBinaryPLY(scan->mesh, scan->distanceToRef, "distance", fullPath, colorRangeMax);
 }
 

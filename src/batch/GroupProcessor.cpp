@@ -374,29 +374,15 @@ GroupResult GroupProcessor::process(
     if (wasCancelled()) return result;
 
     // Stage 8 (optional): Export QC data.
-    // Zero out distanceToRef for vertices outside the region of interest so they
-    // appear neutral (white/grey) in MeshLab and QC review images.
+    // Prepare visualization data for difference PLY files.
     if (!outputDir.isEmpty()) {
         if (useMaskStl) {
-            // Mask STL path: distanceToRef contains scan→mask distances for ALL scan
-            // vertices. Vertices outside the mask coverage area show distance to the
-            // nearest mask boundary, creating misleading colour outside the ROI.
-            // Zero them out: a vertex is "outside" if its distance to the mask surface
-            // exceeds the 99th percentile of |maskDistances| + 1 mm safety margin.
+            // Mask STL path: write the PLY using the mask mesh colored by maskDistances
+            // (mask vertex → nearest scan surface, one value per mask vertex). This
+            // means the PLY contains ONLY the ROI region — no outside-mask geometry
+            // and no boundary-band artefact. The same distance values feed the metrics.
             for (auto& scan : scans) {
-                if (scan->maskDistances.empty() || scan->distanceToRef.empty()) continue;
-
-                std::vector<double> absMask;
-                absMask.reserve(scan->maskDistances.size());
-                for (double d : scan->maskDistances)
-                    absMask.push_back(std::abs(d));
-                std::sort(absMask.begin(), absMask.end());
-                double p99 = absMask[static_cast<std::size_t>(absMask.size() * 0.99)];
-                double threshold = p99 + 1.0;  // +1 mm safety margin
-
-                for (double& d : scan->distanceToRef) {
-                    if (std::abs(d) > threshold) d = 0.0;
-                }
+                scan->plyMesh = maskMesh;
             }
         } else if (useROIRef) {
             for (auto& scan : scans) {
@@ -888,22 +874,16 @@ void GroupProcessor::computePrecisionMetrics(
         scansByScanner[scan->scannerName].push_back(scan);
     }
 
+    // Mask STL path: maskDistances is already computed for every scan and indexed
+    // by the same mask vertices (same mask mesh for the whole group). Pairwise
+    // precision = sqrt(mean((d_i[k] - d_j[k])^2)) — no new AABB trees needed.
+    const bool useMaskPath = !scans.empty() && !scans[0]->maskDistances.empty();
+
     // For each scanner, compute pairwise precision
     for (const auto& [scannerId, scannerScans] : scansByScanner) {
         if (scannerScans.size() < 2) {
             continue;  // Need at least 2 scans for precision
         }
-
-        // Pre-build AABB trees for all scans in this scanner group
-        // This avoids O(N^2) tree construction - build N trees once, reuse
-        std::cout << "\n      Building AABB trees for " << scannerId << " ("
-                  << scannerScans.size() << " scans)..." << std::flush;
-        std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees;
-        trees.reserve(scannerScans.size());
-        for (const auto& scan : scannerScans) {
-            trees.push_back(std::make_unique<DistanceField::ReferenceTree>(scan->mesh));
-        }
-        std::cout << " done\n      Computing pairwise distances..." << std::flush;
 
         PrecisionReport report;
         report.scannerId = QString::fromStdString(scannerId);
@@ -914,56 +894,83 @@ void GroupProcessor::computePrecisionMetrics(
         int totalPairs = static_cast<int>(scannerScans.size() * (scannerScans.size() - 1) / 2);
         int pairsDone = 0;
 
-        // Compute pairwise RMS between all scan pairs using pre-built trees
-        for (std::size_t i = 0; i < scannerScans.size(); i++) {
-            for (std::size_t j = i + 1; j < scannerScans.size(); j++) {
-                const auto& scan1 = scannerScans[i];
+        if (useMaskPath) {
+            // Mask STL path: reuse maskDistances already computed during trueness.
+            // pairwise RMS(i,j) = sqrt(mean_k((maskDist_i[k] - maskDist_j[k])^2))
+            // This is consistent with trueness: both metrics operate on the same
+            // set of mask-vertex distances, no separate ROI filtering needed.
+            std::cout << "\n      Precision (mask path) for " << scannerId
+                      << " (" << totalPairs << " pairs)..." << std::flush;
 
-                // Use pre-built tree for scan j
-                std::vector<double> distances = trees[j]->computePairwiseDistances(scan1->mesh);
+            for (std::size_t i = 0; i < scannerScans.size(); i++) {
+                for (std::size_t j = i + 1; j < scannerScans.size(); j++) {
+                    const auto& di = scannerScans[i]->maskDistances;
+                    const auto& dj = scannerScans[j]->maskDistances;
 
-                pairsDone++;
-                if (pairsDone % 5 == 0 || pairsDone == totalPairs) {
-                    std::cout << "." << std::flush;
-                }
+                    pairsDone++;
+                    if (di.empty() || dj.empty() || di.size() != dj.size()) continue;
 
-                if (distances.empty()) {
-                    continue;
-                }
-
-                // Get occlusal Z for ROI
-                double z_occlusal = computeOcclusalZ(scan1->mesh);
-
-                // Apply ROI mask
-                auto mask = computeROIMask(*scan1, roi, z_occlusal);
-
-                // Apply tooth mask if available (use scan1's mask for the pair)
-                auto it = scanToIndex.find(scan1.get());
-                if (it != scanToIndex.end()) {
-                    std::size_t scanIdx = it->second;
-                    if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
-                        const auto& toothMask = toothMasks[scanIdx];
-                        for (std::size_t k = 0; k < mask.size() && k < toothMask.size(); k++) {
-                            mask[k] = mask[k] && toothMask[k];
-                        }
+                    double sq_sum = 0.0;
+                    for (std::size_t k = 0; k < di.size(); k++) {
+                        double diff = di[k] - dj[k];
+                        sq_sum += diff * diff;
                     }
-                }
-
-                double sq_sum = 0.0;
-                std::size_t count = 0;
-                for (std::size_t k = 0; k < distances.size() && k < mask.size(); k++) {
-                    if (mask[k]) {
-                        double d = distances[k];
-                        sq_sum += d * d;
-                        count++;
-                    }
-                }
-
-                if (count > 0) {
-                    double rms = std::sqrt(sq_sum / count);
-                    pairwiseRMS.push_back(rms);
+                    pairwiseRMS.push_back(std::sqrt(sq_sum / di.size()));
                 }
             }
+            std::cout << " done\n" << std::flush;
+
+        } else {
+            // Fallback path: scan-to-scan pairwise distances with geometric ROI filter.
+            // Build N AABB trees once and reuse across all pairs.
+            std::cout << "\n      Building AABB trees for " << scannerId << " ("
+                      << scannerScans.size() << " scans)..." << std::flush;
+            std::vector<std::unique_ptr<DistanceField::ReferenceTree>> trees;
+            trees.reserve(scannerScans.size());
+            for (const auto& scan : scannerScans) {
+                trees.push_back(std::make_unique<DistanceField::ReferenceTree>(scan->mesh));
+            }
+            std::cout << " done\n      Computing pairwise distances..." << std::flush;
+
+            for (std::size_t i = 0; i < scannerScans.size(); i++) {
+                for (std::size_t j = i + 1; j < scannerScans.size(); j++) {
+                    const auto& scan1 = scannerScans[i];
+
+                    std::vector<double> distances = trees[j]->computePairwiseDistances(scan1->mesh);
+
+                    pairsDone++;
+                    if (pairsDone % 5 == 0 || pairsDone == totalPairs)
+                        std::cout << "." << std::flush;
+
+                    if (distances.empty()) continue;
+
+                    double z_occlusal = computeOcclusalZ(scan1->mesh);
+                    auto mask = computeROIMask(*scan1, roi, z_occlusal);
+
+                    auto it = scanToIndex.find(scan1.get());
+                    if (it != scanToIndex.end()) {
+                        std::size_t scanIdx = it->second;
+                        if (scanIdx < toothMasks.size() && !toothMasks[scanIdx].empty()) {
+                            const auto& toothMask = toothMasks[scanIdx];
+                            for (std::size_t k = 0; k < mask.size() && k < toothMask.size(); k++)
+                                mask[k] = mask[k] && toothMask[k];
+                        }
+                    }
+
+                    double sq_sum = 0.0;
+                    std::size_t count = 0;
+                    for (std::size_t k = 0; k < distances.size() && k < mask.size(); k++) {
+                        if (mask[k]) {
+                            double d = distances[k];
+                            sq_sum += d * d;
+                            count++;
+                        }
+                    }
+                    if (count > 0)
+                        pairwiseRMS.push_back(std::sqrt(sq_sum / count));
+                }
+            }
+            std::cout << " done (" << pairsDone << " pairs)\n" << std::flush;
         }
 
         if (pairwiseRMS.empty()) {
@@ -984,7 +991,6 @@ void GroupProcessor::computePrecisionMetrics(
         }
 
         result.precisionReports.push_back(report);
-        std::cout << " done (" << pairsDone << " pairs)\n" << std::flush;
     }
 
     std::cout << "    Precision metrics complete: " << result.precisionReports.size() << " scanner groups\n" << std::flush;
