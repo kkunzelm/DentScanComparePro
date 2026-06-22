@@ -12,10 +12,6 @@
 
 namespace DentScanBatch {
 
-void CSVWriter::writeBOM(QFile& file) {
-    // UTF-8 BOM for Windows Excel
-    file.write("\xEF\xBB\xBF");
-}
 
 QString CSVWriter::escapeCSV(const QString& str) {
     if (str.contains(',') || str.contains('"') || str.contains('\n')) {
@@ -52,7 +48,6 @@ bool CSVWriter::writeTruenessCSV(
         return false;
     }
 
-    writeBOM(file);
     QTextStream out(&file);
 
     // Header
@@ -114,7 +109,6 @@ bool CSVWriter::appendTruenessCSV(
 
     // Write header only if new file
     if (!fileExists) {
-        writeBOM(file);
         writeTruenessHeader(out);
     }
 
@@ -162,7 +156,6 @@ bool CSVWriter::writePrecisionCSV(
         return false;
     }
 
-    writeBOM(file);
     QTextStream out(&file);
 
     // Header
@@ -201,7 +194,6 @@ bool CSVWriter::appendPrecisionCSV(
 
     // Write header only if new file
     if (!fileExists) {
-        writeBOM(file);
         writePrecisionHeader(out);
     }
 
@@ -227,7 +219,6 @@ bool CSVWriter::writeSummaryCSV(
         return false;
     }
 
-    writeBOM(file);
     QTextStream out(&file);
 
     // Group reports by Scanner×Group

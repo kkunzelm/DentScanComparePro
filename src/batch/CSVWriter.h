@@ -131,9 +131,6 @@ public:
     static QString makeScanId(const BatchMetricReport& report);
 
 private:
-    // Write UTF-8 BOM for Windows Excel compatibility
-    static void writeBOM(QFile& file);
-
     // Escape a string for CSV (quote if contains comma, quote, or newline)
     static QString escapeCSV(const QString& str);
 
