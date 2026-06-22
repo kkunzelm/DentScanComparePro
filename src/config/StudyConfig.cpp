@@ -208,6 +208,17 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
 
         group.representativeScan = grp["representative_scan"].toString();
         group.roiMaskStlPath     = grp["roi_mask_stl"].toString();
+
+        // Migrate from old roi_template_file: derive companion STL path if it exists on disk
+        if (group.roiMaskStlPath.isEmpty()) {
+            QString oldJson = grp["roi_template_file"].toString();
+            if (!oldJson.isEmpty()) {
+                QString derived = QFileInfo(oldJson).absolutePath() + "/" +
+                                  QFileInfo(oldJson).completeBaseName() + "_roi_mask.stl";
+                if (QFile::exists(derived))
+                    group.roiMaskStlPath = derived;
+            }
+        }
         config.groups.push_back(group);
     }
 
