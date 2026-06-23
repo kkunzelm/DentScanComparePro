@@ -78,9 +78,6 @@ private slots:
     void onOcclusPlanePicked(double x, double y, double z);
     void clearOcclusPlanePoints();
 
-    // Brush for tooth mask editing
-    void onBrushEditToothMaskToggled(bool active);
-
     // Batch processing
     void runBatch();
     void cancelBatch();
@@ -141,9 +138,6 @@ private:
     Eigen::Vector3d m_occlusPlaneOrigin{0, 0, 0};
     bool m_occlusPlaneValid = false;
 
-    // Brush mode for tooth mask editing
-    bool m_brushEditToothMask = false;
-
     // Batch runner
     std::unique_ptr<DentScanBatch::BatchRunner> m_batchRunner;
     QFutureWatcher<bool>* m_batchWatcher = nullptr;
@@ -199,7 +193,6 @@ private:
     QPushButton* m_brushExcludeBtn = nullptr;
     class QDoubleSpinBox* m_brushRadiusSpin = nullptr;
     QPushButton* m_clearBrushBtn = nullptr;
-    class QCheckBox* m_brushEditToothMaskChk = nullptr;
 
     // Sigma clipping
     class QDoubleSpinBox* m_sigmaSpin = nullptr;
