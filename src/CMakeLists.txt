@@ -1,3 +1,29 @@
+# ─── Version information ──────────────────────────────────────────────────────
+# Extract git commit hash
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT GIT_COMMIT_HASH)
+    set(GIT_COMMIT_HASH "unknown")
+endif()
+
+# Get build timestamp
+string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+
+# Application version from project
+set(APP_VERSION "${CMAKE_PROJECT_VERSION}")
+
+# Configure version header
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/version.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/version.h
+    @ONLY
+)
+
 # Core computation sources (reused from DentScanCompare)
 set(CORE_SOURCES
     core/STLReader.cpp
@@ -62,6 +88,7 @@ add_executable(DentScanComparePro ${SOURCES})
 
 target_include_directories(DentScanComparePro PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}  # For generated version.h
 )
 
 target_link_libraries(DentScanComparePro PRIVATE

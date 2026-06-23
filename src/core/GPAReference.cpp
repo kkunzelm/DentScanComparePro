@@ -185,45 +185,22 @@ std::vector<Eigen::Vector3d> computeVertexNormals(const SurfaceMesh& mesh)
     return normals;
 }
 
-// ─── Compute normal at closest point on scan surface ─────────────────────────
-// Given the closest point (which lies on a triangle), compute the face normal.
-Eigen::Vector3d computeNormalAtClosestPoint(
-    const SurfaceMesh& mesh,
-    const Point3& closestPoint)
+// ─── Compute face normal directly from face handle ───────────────────────────
+// Given a face handle from the AABB tree primitive, compute the face normal.
+// This is O(1) since we already have the face.
+Eigen::Vector3d computeFaceNormal(const SurfaceMesh& mesh, SurfaceMesh::Face_index faceIdx)
 {
-    // Find the face containing the closest point by checking all faces.
-    // This is O(n) but we could optimize with spatial indexing if needed.
-    // For now, we use a tolerance-based search.
-    double bestDist = std::numeric_limits<double>::max();
-    Eigen::Vector3d bestNormal(0, 0, 1);
+    auto h = mesh.halfedge(faceIdx);
+    const Point3& p0 = mesh.point(mesh.source(h));
+    const Point3& p1 = mesh.point(mesh.target(h));
+    const Point3& p2 = mesh.point(mesh.target(mesh.next(h)));
 
-    for (auto f : mesh.faces()) {
-        auto h = mesh.halfedge(f);
-        const Point3& p0 = mesh.point(mesh.source(h));
-        const Point3& p1 = mesh.point(mesh.target(h));
-        const Point3& p2 = mesh.point(mesh.target(mesh.next(h)));
-
-        // Compute face centroid and check distance to closest point
-        double cx = (p0.x() + p1.x() + p2.x()) / 3.0;
-        double cy = (p0.y() + p1.y() + p2.y()) / 3.0;
-        double cz = (p0.z() + p1.z() + p2.z()) / 3.0;
-
-        double dx = closestPoint.x() - cx;
-        double dy = closestPoint.y() - cy;
-        double dz = closestPoint.z() - cz;
-        double dist = dx*dx + dy*dy + dz*dz;
-
-        if (dist < bestDist) {
-            bestDist = dist;
-            Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
-            Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
-            bestNormal = e1.cross(e2);
-            double len = bestNormal.norm();
-            if (len > 1e-10) bestNormal /= len;
-        }
-    }
-
-    return bestNormal;
+    Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+    Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+    Eigen::Vector3d normal = e1.cross(e2);
+    double len = normal.norm();
+    if (len > 1e-10) normal /= len;
+    return normal;
 }
 
 // ─── True mean-mesh update with robust averaging ─────────────────────────────
@@ -341,7 +318,11 @@ void updateToMeanMesh(ScanData& gpaRef,
         std::size_t normReject = 0;
 
         for (std::size_t si = 0; si < numTrees; ++si) {
-            Point3 cp = treesPtr[si]->closest_point(p);
+            // Use closest_point_and_primitive to get both point and face in O(log n)
+            auto result = treesPtr[si]->closest_point_and_primitive(p);
+            const Point3& cp = result.first;
+            auto faceHandle = result.second;
+
             double cpx = CGAL::to_double(cp.x());
             double cpy = CGAL::to_double(cp.y());
             double cpz = CGAL::to_double(cp.z());
@@ -358,10 +339,10 @@ void updateToMeanMesh(ScanData& gpaRef,
                 }
             }
 
-            // Normal consistency check
+            // Normal consistency check - now O(1) using the face handle directly
             if (useNormalConsistency) {
-                Eigen::Vector3d scanNormal = computeNormalAtClosestPoint(
-                    scansPtr[si]->mesh, cp);
+                // faceHandle is already a SurfaceMesh::Face_index
+                Eigen::Vector3d scanNormal = computeFaceNormal(scansPtr[si]->mesh, faceHandle);
                 double dotProduct = refNormal.dot(scanNormal);
                 if (dotProduct < params.minNormalDotProduct) {
                     normReject++;

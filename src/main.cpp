@@ -14,6 +14,7 @@
 #include <QCommandLineOption>
 #include <iostream>
 
+#include "version.h"
 #include "batch/BatchRunner.h"
 #include "config/StudyConfig.h"
 #include "config/ROIConfig.h"
@@ -23,7 +24,7 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     QApplication::setApplicationName("DentScanComparePro");
-    QApplication::setApplicationVersion("1.0.0");
+    QApplication::setApplicationVersion(QString("%1 (%2)").arg(APP_VERSION, GIT_COMMIT_HASH));
     QApplication::setOrganizationName("Prof. Dr. Karl-Heinz Kunzelmann");
 
     // Command-line argument parsing

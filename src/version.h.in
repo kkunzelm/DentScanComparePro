@@ -1,0 +1,6 @@
+// Auto-generated version information - do not edit manually
+#pragma once
+
+#define APP_VERSION "@APP_VERSION@"
+#define GIT_COMMIT_HASH "@GIT_COMMIT_HASH@"
+#define BUILD_TIMESTAMP "@BUILD_TIMESTAMP@"

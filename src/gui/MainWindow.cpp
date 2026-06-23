@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2024 Prof. Dr. Karl-Heinz Kunzelmann
 
 #include "MainWindow.h"
+#include "version.h"
 #include "../visualization/VTKMeshWidget.h"
 #include "../batch/BatchRunner.h"
 #include "../core/STLReader.h"
@@ -190,11 +191,16 @@ void MainWindow::setupMenuBar()
         aboutBox.setWindowTitle("About DentScanComparePro");
         aboutBox.setTextFormat(Qt::RichText);
         aboutBox.setText(
-            "<h3>DentScanComparePro v1.0</h3>"
+            QString("<h3>DentScanComparePro v%1</h3>"
             "<p>Automated batch evaluation of dental intraoral scanner accuracy.<br>"
             "Computes ISO 5725/12836-compliant trueness and precision metrics.</p>"
+            "<p><b>Build:</b> %2<br>"
+            "<b>Commit:</b> %3</p>"
             "<p><b>Prof. Dr. Karl-Heinz Kunzelmann</b><br>"
-            "<a href=\"https://www.kunzelmann.de\">www.kunzelmann.de</a></p>");
+            "<a href=\"https://www.kunzelmann.de\">www.kunzelmann.de</a></p>")
+            .arg(APP_VERSION)
+            .arg(BUILD_TIMESTAMP)
+            .arg(GIT_COMMIT_HASH));
         aboutBox.setTextInteractionFlags(Qt::TextBrowserInteraction);
         aboutBox.exec();
     });
