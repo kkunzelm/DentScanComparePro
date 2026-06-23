@@ -1692,9 +1692,10 @@ void MainWindow::updateROIVisualization()
         idx++;
     }
 
-    // Apply tooth mask if available and enabled
-    if (m_useToothMaskChk && m_useToothMaskChk->isChecked() &&
-        !m_toothMask.empty() && m_toothMask.size() == mask.size()) {
+    // Apply tooth mask if available and enabled, OR if we're editing the tooth mask directly
+    // (so the user can see their brush edits even before checking "Use Base Selection as ROI")
+    bool useToothMask = (m_useToothMaskChk && m_useToothMaskChk->isChecked()) || m_brushEditToothMask;
+    if (useToothMask && !m_toothMask.empty() && m_toothMask.size() == mask.size()) {
         for (std::size_t i = 0; i < mask.size(); i++) {
             mask[i] = mask[i] && m_toothMask[i];
         }
@@ -1703,7 +1704,7 @@ void MainWindow::updateROIVisualization()
     // Display visualization
     if (!m_currentROI.brushZones.empty()) {
         std::vector<bool> toothMask;
-        if (m_useToothMaskChk && m_useToothMaskChk->isChecked() && !m_toothMask.empty()) {
+        if (useToothMask && !m_toothMask.empty()) {
             toothMask = m_toothMask;
         }
         m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, toothMask);
