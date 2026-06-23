@@ -266,6 +266,13 @@ void MainWindow::setupConfigTab()
     auto* refRow = new QHBoxLayout();
     m_externalRefEdit = new QLineEdit();
     m_externalRefEdit->setPlaceholderText("Optional: external reference STL (CAD or lab scanner)");
+    m_externalRefEdit->setToolTip(
+        "External reference mesh (STL) for trueness computation.\n\n"
+        "Use this when you have a ground-truth surface (e.g., CAD model,\n"
+        "industrial lab scanner, or micro-CT reconstruction) that serves\n"
+        "as the gold standard.\n\n"
+        "If empty, the software computes a GPA mean mesh from all scans\n"
+        "in each group as the reference (Virtual Reference Model).");
     auto* browseRefBtn = new QPushButton("Browse...");
     connect(browseRefBtn, &QPushButton::clicked, this, &MainWindow::browseExternalRef);
     connect(m_externalRefEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
@@ -303,6 +310,14 @@ void MainWindow::setupConfigTab()
     auto* roiRow = new QHBoxLayout();
     m_roiTemplateEdit = new QLineEdit();
     m_roiTemplateEdit->setPlaceholderText("Optional: ROI template JSON (from ROI Template Editor)");
+    m_roiTemplateEdit->setToolTip(
+        "ROI Template JSON file created in the ROI Template Editor tab.\n\n"
+        "Contains the ROI definition (bounding box, plane slab, brush zones)\n"
+        "that specifies which part of each scan surface contributes to metrics.\n\n"
+        "The template also stores the path to the representative scan and,\n"
+        "when saved, generates a companion *_roi_mask.stl file.\n\n"
+        "For batch processing with multiple groups, use 'ROI Masks Dir' instead\n"
+        "to specify a directory with per-group mask STL files.");
     auto* browseROIBtn = new QPushButton("Browse...");
     connect(browseROIBtn, &QPushButton::clicked, this, &MainWindow::browseROITemplate);
     connect(m_roiTemplateEdit, &QLineEdit::textChanged, this, &MainWindow::saveSettings);
