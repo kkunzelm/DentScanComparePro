@@ -154,6 +154,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
     // Alignment config
     auto align = study["alignment"].toObject();
     config.alignment.maxIcpIterations = align["max_icp_iterations"].toInt(100);
+    config.alignment.maxGpaIterations = align["max_gpa_iterations"].toInt(Defaults::kMaxGpaIterations);
     config.alignment.convergenceThreshold = align["convergence_threshold_mm"].toDouble(0.01);
     config.alignment.usePcaCoarse = align["use_pca_coarse"].toBool(true);
     config.alignment.use4OrientationTest = align["use_4orientation_test"].toBool(true);
@@ -287,6 +288,7 @@ void StudyConfig::saveToJSON(const QString& path) const {
 
     QJsonObject align;
     align["max_icp_iterations"] = alignment.maxIcpIterations;
+    align["max_gpa_iterations"] = alignment.maxGpaIterations;
     align["convergence_threshold_mm"] = alignment.convergenceThreshold;
     align["use_pca_coarse"] = alignment.usePcaCoarse;
     align["use_4orientation_test"] = alignment.use4OrientationTest;
@@ -558,6 +560,7 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
         if (study["alignment"]) {
             auto align = study["alignment"];
             config.alignment.maxIcpIterations = align["max_icp_iterations"].as<int>(100);
+            config.alignment.maxGpaIterations = align["max_gpa_iterations"].as<int>(Defaults::kMaxGpaIterations);
             config.alignment.convergenceThreshold = align["convergence_threshold_mm"].as<double>(0.01);
             config.alignment.usePcaCoarse = align["use_pca_coarse"].as<bool>(true);
             config.alignment.use4OrientationTest = align["use_4orientation_test"].as<bool>(true);
@@ -653,6 +656,7 @@ void StudyConfig::saveToYAML(const QString& path) const {
 
     out << YAML::Key << "alignment" << YAML::Value << YAML::BeginMap;
     out << YAML::Key << "max_icp_iterations" << YAML::Value << alignment.maxIcpIterations;
+    out << YAML::Key << "max_gpa_iterations" << YAML::Value << alignment.maxGpaIterations;
     out << YAML::Key << "convergence_threshold_mm" << YAML::Value << alignment.convergenceThreshold;
     out << YAML::Key << "use_pca_coarse" << YAML::Value << alignment.usePcaCoarse;
     out << YAML::Key << "use_4orientation_test" << YAML::Value << alignment.use4OrientationTest;

@@ -560,7 +560,7 @@ bool GroupProcessor::runGPAAlignment(
 
     // Set up GPA parameters
     GPAReference::Params params;
-    params.maxGPAIterations = 20;
+    params.maxGPAIterations = alignment.maxGpaIterations;
     params.convergenceThresh = alignment.convergenceThreshold;
     params.icpParams.maxIterations  = alignment.maxIcpIterations;
     params.skipPcaCoarseAlign       = scansNormalized;

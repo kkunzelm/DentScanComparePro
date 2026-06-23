@@ -42,6 +42,7 @@ struct GroupConfig {
  */
 struct AlignmentConfig {
     int maxIcpIterations = Defaults::kMaxIcpIterations;
+    int maxGpaIterations = Defaults::kMaxGpaIterations;
     double convergenceThreshold = Defaults::kConvergenceThreshold;  // mm
     bool usePcaCoarse = true;
     bool use4OrientationTest = true;

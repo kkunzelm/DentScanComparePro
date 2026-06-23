@@ -34,9 +34,13 @@ All four top-level keys are required.
   "alignments_directory": "",
   "alignment": {
     "max_icp_iterations": 100,
+    "max_gpa_iterations": 20,
     "convergence_threshold_mm": 0.01,
     "use_pca_coarse": true,
-    "use_4orientation_test": true
+    "use_4orientation_test": true,
+    "mean_mesh_max_distance_mm": 0.15,
+    "mean_mesh_min_coverage": 0.9,
+    "mean_mesh_min_normal_dot": 0.5
   }
 }
 ```
@@ -51,14 +55,18 @@ All four top-level keys are required.
 | `scans_normalized` | bool | no | `true` | **See explanation below.** When `true`, the software does not load JSON transform files from `alignments_directory`, even if that directory is set. Use `true` when scan geometry already has the alignment transform baked in (DentScanAlign normalized STL output). |
 | `alignments_directory` | string | no | `""` | Path to a directory containing DentScanAlign JSON transform files. Only used when `scans_normalized: false`. |
 
-### `study.alignment` — ICP registration parameters
+### `study.alignment` — ICP and GPA registration parameters
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_icp_iterations` | integer | `100` | Maximum number of point-to-plane ICP iterations per alignment pass. |
-| `convergence_threshold_mm` | float | `0.01` | ICP is considered converged when the mean displacement between iterations falls below this value (mm). |
+| `max_gpa_iterations` | integer | `20` | Maximum number of GPA cycles. Each cycle aligns all scans to the current reference and updates the mean mesh. Set to 10–12 if GPA oscillates instead of converging. |
+| `convergence_threshold_mm` | float | `0.01` | GPA is considered converged when the maximum reference vertex displacement between cycles falls below this value (mm). For datasets with boundary coverage variation, 0.1–0.15 may be more practical. |
 | `use_pca_coarse` | bool | `true` | Run a PCA-based coarse alignment (centroid + principal axes) before ICP. Required when scans may have arbitrary orientation. |
 | `use_4orientation_test` | bool | `true` | After PCA, test four 90° rotations around the Z-axis and pick the one that gives the lowest ICP residual. Catches 180° flips that PCA alone cannot resolve. |
+| `mean_mesh_max_distance_mm` | float | `0.15` | Maximum distance (mm) for a closest point to be valid during mean mesh computation. Larger values allow more correspondences but risk including points from adjacent surfaces. |
+| `mean_mesh_min_coverage` | float | `0.9` | Minimum fraction of scans (0.0–1.0) that must have valid correspondences for a vertex to be included. Lower values (0.5–0.7) allow more vertices but may include poorly-covered regions. |
+| `mean_mesh_min_normal_dot` | float | `0.5` | Minimum normal dot product (0.0–1.0) for correspondence validity. 0.5 allows ~60° deviation; lower values are more permissive at boundaries. |
 
 ---
 
@@ -333,6 +341,7 @@ The `--output` command-line option overrides `base_dir`. Filenames within the di
     "scans_normalized": false,
     "alignment": {
       "max_icp_iterations": 100,
+      "max_gpa_iterations": 20,
       "convergence_threshold_mm": 0.01,
       "use_pca_coarse": true,
       "use_4orientation_test": true
@@ -376,9 +385,13 @@ The `--output` command-line option overrides `base_dir`. Filenames within the di
     "scans_normalized": true,
     "alignment": {
       "max_icp_iterations": 100,
-      "convergence_threshold_mm": 0.01,
+      "max_gpa_iterations": 12,
+      "convergence_threshold_mm": 0.15,
       "use_pca_coarse": true,
-      "use_4orientation_test": true
+      "use_4orientation_test": true,
+      "mean_mesh_max_distance_mm": 0.5,
+      "mean_mesh_min_coverage": 0.5,
+      "mean_mesh_min_normal_dot": 0.3
     }
   },
   "scanners": [
