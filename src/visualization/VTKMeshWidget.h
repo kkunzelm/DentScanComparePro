@@ -95,11 +95,12 @@ public:
     void showToothSegmentation(const std::shared_ptr<ScanData>& scan,
                                const std::vector<bool>& toothMask);
 
-    // Show brush zone effects on mesh: include zones = green, exclude = dark.
-    // Combines with existing visualization (segmentation or base color).
+    // Show brush zone effects on mesh: include zones = green, exclude = red.
+    // baseMask: combined mask from bbox/plane/segmentation (vertices in ROI = true)
+    // Brush zones override baseMask: include zones force vertices IN, exclude zones force OUT.
     void showBrushZones(const std::shared_ptr<ScanData>& scan,
                         const std::vector<DentScanBatch::BrushZone>& zones,
-                        const std::vector<bool>& toothMask = {});
+                        const std::vector<bool>& baseMask = {});
 
     // Show a wireframe bounding box with the given min/max coordinates.
     void showBoundingBox(const std::array<double, 3>& minPt,

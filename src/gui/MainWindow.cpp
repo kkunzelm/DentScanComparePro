@@ -1645,12 +1645,10 @@ void MainWindow::updateROIVisualization()
     }
 
     // Display visualization
+    // Pass the combined mask (bbox + plane + optionally tooth segmentation) to showBrushZones
+    // so that all ROI constraints are visualized, with brush zones overriding them
     if (!m_currentROI.brushZones.empty()) {
-        std::vector<bool> toothMask;
-        if (useToothMask && !m_toothMask.empty()) {
-            toothMask = m_toothMask;
-        }
-        m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, toothMask);
+        m_roiMeshWidget->showBrushZones(m_templateScan, m_currentROI.brushZones, mask);
     } else {
         m_roiMeshWidget->showToothSegmentation(m_templateScan, mask);
     }
