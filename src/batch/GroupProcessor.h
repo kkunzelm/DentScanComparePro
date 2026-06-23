@@ -162,7 +162,8 @@ private:
                          GPAReference::MeanMeshResult& coverageOut,
                          GroupResult& result,
                          bool scansNormalized = false,
-                         const std::vector<std::vector<bool>>& icpMasks = {});
+                         const std::vector<std::vector<bool>>& icpMasks = {},
+                         const QString& initialReferenceScan = QString());
 
     bool computeDistances(std::vector<std::shared_ptr<ScanData>>& scans,
                           const std::shared_ptr<SurfaceMesh>& gpaMean,

@@ -75,6 +75,12 @@ struct Params {
     // are aligned to it.  The mean-mesh update step is skipped.
     std::string fixedRefScannerName;
 
+    // If non-empty: use this filename (or path suffix) to select the initial
+    // reference scan. Matches against filePath or fileName of each scan.
+    // Takes precedence over fixedRefScannerName. Useful when you want to
+    // manually select a specific scan as the starting reference for GPA.
+    std::string initialRefFilename;
+
     // Skip pcaCoarseAlign() and resolveZRotation() when scans are already in
     // canonical orientation (e.g. from DentScanAlignPro).  Running PCA on
     // pre-oriented scans can introduce errors when patient geometry produces

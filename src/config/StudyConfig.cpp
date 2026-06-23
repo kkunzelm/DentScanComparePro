@@ -214,6 +214,7 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
 
         group.representativeScan = grp["representative_scan"].toString();
         group.roiMaskStlPath     = grp["roi_mask_stl"].toString();
+        group.initialReferenceScan = grp["initial_reference_scan"].toString();
 
         // Migrate from old roi_template_file: derive companion STL path if it exists on disk
         if (group.roiMaskStlPath.isEmpty()) {
@@ -345,6 +346,9 @@ void StudyConfig::saveToJSON(const QString& path) const {
         }
         if (!group.roiMaskStlPath.isEmpty()) {
             grpObj["roi_mask_stl"] = group.roiMaskStlPath;
+        }
+        if (!group.initialReferenceScan.isEmpty()) {
+            grpObj["initial_reference_scan"] = group.initialReferenceScan;
         }
 
         groupsArr.append(grpObj);
@@ -612,6 +616,12 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
 
             if (grpNode["representative_scan"]) {
                 group.representativeScan = QString::fromStdString(grpNode["representative_scan"].as<std::string>());
+            }
+            if (grpNode["roi_mask_stl"]) {
+                group.roiMaskStlPath = QString::fromStdString(grpNode["roi_mask_stl"].as<std::string>());
+            }
+            if (grpNode["initial_reference_scan"]) {
+                group.initialReferenceScan = QString::fromStdString(grpNode["initial_reference_scan"].as<std::string>());
             }
 
             config.groups.push_back(group);

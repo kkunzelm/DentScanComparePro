@@ -341,7 +341,8 @@ GroupResult GroupProcessor::process(
             referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
         } else {
             // Run GPA alignment (passes icpMasks so GPA iterations also use masked ICP)
-            if (!runGPAAlignment(scans, alignment, referenceMesh, result.coverageResult, result, scansNormalized, icpMasks)) {
+            if (!runGPAAlignment(scans, alignment, referenceMesh, result.coverageResult, result,
+                                 scansNormalized, icpMasks, group.initialReferenceScan)) {
                 return result;
             }
         }
@@ -536,7 +537,8 @@ bool GroupProcessor::runGPAAlignment(
     GPAReference::MeanMeshResult& coverageOut,
     GroupResult& result,
     bool scansNormalized,
-    const std::vector<std::vector<bool>>& icpMasks)
+    const std::vector<std::vector<bool>>& icpMasks,
+    const QString& initialReferenceScan)
 {
     emit progressUpdated(++m_currentStep, m_totalSteps, "Running GPA alignment");
     if (scansNormalized)
@@ -567,6 +569,11 @@ bool GroupProcessor::runGPAAlignment(
     params.icpParams.hierarchyLevels = alignment.icpHierarchyLevels;
     params.icpParams.negCurvK       = alignment.icpHierarchyNegCurvK;
     params.scanMasks = icpMasks;
+
+    // Manual initial reference selection (if specified in study config)
+    if (!initialReferenceScan.isEmpty()) {
+        params.initialRefFilename = initialReferenceScan.toStdString();
+    }
 
     // Mean mesh / coverage filtering parameters (gingiva exclusion)
     params.meanMeshParams.maxCorrespondenceDistance = alignment.meanMeshMaxDistance;

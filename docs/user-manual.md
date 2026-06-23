@@ -55,7 +55,7 @@ Create a JSON file describing your study. For a full field-by-field reference se
 ```json
 {
   "study": {
-    "name": "Scanner_Comparison_2024",
+    "name": "Scanner_Comparison_2026",
     "version": 1,
     "reference_strategy": "gpa_mean",
     "scans_normalized": true,
@@ -1018,6 +1018,32 @@ The GUI provides two checkboxes that are **mutually exclusive** — checking one
 | **Scans are pre-aligned** ✓ | Raw STL files + JSON transform files from DentScanAlign | Load JSON transforms, apply them, then run ICP refinement only (skip full GPA). |
 | **Both unchecked** ☐ | Raw STL files with no prior alignment | Run full GPA with PCA coarse alignment. |
 
+### Initial Reference Scan Selection
+
+During GPA, one scan is chosen as the starting reference. This choice affects convergence speed and the quality of the initial alignment. The selection follows this priority:
+
+1. **Manual selection** via `initial_reference_scan` in the group config (JSON study file)
+2. **Automatic fallback**: scan with the **median** triangle count
+
+**Why median instead of largest?** Previously, the software selected the scan with the most triangles. However, scans with more triangles often have more soft tissue/gingiva captured, which introduces artifacts into the reference mesh. The median is robust against such outliers.
+
+**To manually specify the initial reference** for each group, add `initial_reference_scan` to your study JSON:
+
+```json
+"groups": [
+  {
+    "id": "002",
+    "file_patterns": ["*_002_*_aligned.stl"],
+    "initial_reference_scan": "Primescan_002_D2_aligned.stl"
+  }
+]
+```
+
+The console will show:
+```
+Initial reference: .../Primescan_002_D2_aligned.stl (selected by filename match)
+```
+
 ### When Is a Reference Mesh (Mean Mesh) Computed?
 
 The reference mesh computation depends on **two factors**:
@@ -1054,20 +1080,49 @@ The software now includes **robust averaging** to prevent artifacts in the mean 
 2. **Run the batch again** with your normal settings. The software will:
    - Recompute the GPA alignment (or ICP refinement, depending on your settings)
    - Generate new mean meshes using robust averaging with default parameters:
-     - `maxCorrespondenceDistance = 0.5 mm` — reject closest points farther than this
-     - `minNormalDotProduct = 0.5` — reject if normals differ by >60°
-     - `minValidScansFraction = 0.5` — keep original position if <50% of scans have valid data
+     - `mean_mesh_max_distance_mm = 0.15` — reject closest points farther than this
+     - `mean_mesh_min_normal_dot = 0.5` — reject if normals differ by >60°
+     - `mean_mesh_min_coverage = 0.9` — require 90% of scans to have valid data
+
+   These strict defaults implement a "boolean AND" intersection approach that automatically excludes gingiva and soft tissue regions not consistently captured across all scans.
 
 3. **Check the console output** for statistics:
    ```
    Mean mesh statistics:
-     Vertices updated:        45230 / 48000
-     Vertices kept original:  2770 (insufficient coverage)
-     Distance rejections:     12450 (across all vertices)
-     Normal rejections:       3200 (across all vertices)
+     Vertices with good coverage: 42150 / 48000 (87.8%)
+     Faces with good coverage:    83200 / 96000 (86.7%)
+     Distance rejections:         12450 (across all vertices)
+     Normal rejections:           3200 (across all vertices)
+
+   GPA coverage: 83200/96000 faces (86.7%) have consistent coverage across all scans
    ```
 
 **Note:** If you are using an external reference (`External Ref` field is set), no mean mesh is computed — the external STL is used directly. The robust averaging improvements do not apply in this case.
+
+### Tuning Coverage Filtering Parameters
+
+If the default strict settings exclude too much tooth surface, or if you want even stricter gingiva exclusion, you can configure these parameters in your study YAML file:
+
+```yaml
+study:
+  alignment:
+    # Coverage filtering for gingiva exclusion
+    mean_mesh_max_distance_mm: 0.15   # Default: 0.15 (strict)
+    mean_mesh_min_coverage: 0.9       # Default: 0.9 (strict)
+    mean_mesh_min_normal_dot: 0.5     # Default: 0.5
+```
+
+**Parameter guide:**
+
+| Use Case | `mean_mesh_max_distance_mm` | `mean_mesh_min_coverage` |
+|----------|----------------------------|--------------------------|
+| **Strict gingiva exclusion** (default) | 0.10 – 0.15 | 0.9 – 1.0 |
+| **Moderate filtering** | 0.2 – 0.3 | 0.7 – 0.8 |
+| **Permissive (old behavior)** | 0.5 | 0.5 |
+
+- `mean_mesh_max_distance_mm`: Maximum distance for a scan's closest point to be valid. Smaller = stricter. If a scan has a hole at a location, its closest point will be farther away and will be rejected.
+- `mean_mesh_min_coverage`: Fraction of scans that must have valid data. 1.0 = all scans must agree (true boolean AND). 0.9 = 90% of scans.
+- `mean_mesh_min_normal_dot`: Normal consistency check. 0.5 = allow up to ~60° deviation. Set to 0.0 to disable.
 
 ### Typical Workflow for Recalculation
 

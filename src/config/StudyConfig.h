@@ -32,6 +32,8 @@ struct GroupConfig {
     QString representativeScan;    // Path to representative scan for template editor
     QString inheritROIFrom;        // ID of group to inherit ROI from (empty = own ROI)
     QString roiMaskStlPath;        // Path to pre-built mask STL (approved in ROI Template Editor)
+    QString initialReferenceScan;  // Path or filename of scan to use as initial GPA reference
+                                   // (if empty, fallback to median triangle count selection)
 };
 
 /**

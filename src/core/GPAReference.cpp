@@ -524,16 +524,54 @@ GPAResult compute(
             pcaCoarseAlign(*scan);
     }
 
-    // Initial reference: either the named scanner or the one with the most triangles.
+    // Initial reference selection priority:
+    // 1. initialRefFilename (match by filename/path suffix)
+    // 2. fixedRefScannerName (match by scanner name)
+    // 3. Fallback: median triangle count (robust against outliers with excessive soft tissue)
     auto refIt = scans.end();
-    if (!params.fixedRefScannerName.empty()) {
+
+    // Try matching by filename first
+    if (!params.initialRefFilename.empty()) {
+        refIt = std::find_if(scans.begin(), scans.end(),
+            [&](const auto& s) {
+                // Match against full path or just filename
+                if (s->filePath.find(params.initialRefFilename) != std::string::npos)
+                    return true;
+                // Also try matching just the filename part
+                std::string filename = s->filePath;
+                auto lastSlash = filename.find_last_of("/\\");
+                if (lastSlash != std::string::npos)
+                    filename = filename.substr(lastSlash + 1);
+                return filename == params.initialRefFilename;
+            });
+        if (refIt != scans.end()) {
+            std::cout << "    Initial reference: " << (*refIt)->filePath
+                      << " (selected by filename match)\n" << std::flush;
+        }
+    }
+
+    // Try matching by scanner name
+    if (refIt == scans.end() && !params.fixedRefScannerName.empty()) {
         refIt = std::find_if(scans.begin(), scans.end(),
             [&](const auto& s){ return s->scannerName == params.fixedRefScannerName; });
+        if (refIt != scans.end()) {
+            std::cout << "    Initial reference: " << (*refIt)->filePath
+                      << " (selected by scanner name match)\n" << std::flush;
+        }
     }
+
+    // Fallback: use median triangle count (robust against outliers with excessive soft tissue)
     if (refIt == scans.end()) {
-        refIt = std::max_element(scans.begin(), scans.end(),
-            [](const auto& a, const auto& b){
-                return a->triangleCount < b->triangleCount; });
+        // Create a sorted copy of indices by triangle count
+        std::vector<std::size_t> indices(scans.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::nth_element(indices.begin(), indices.begin() + indices.size() / 2, indices.end(),
+            [&](std::size_t a, std::size_t b) {
+                return scans[a]->triangleCount < scans[b]->triangleCount;
+            });
+        refIt = scans.begin() + static_cast<std::ptrdiff_t>(indices[indices.size() / 2]);
+        std::cout << "    Initial reference: " << (*refIt)->filePath
+                  << " (median triangle count: " << (*refIt)->triangleCount << ")\n" << std::flush;
     }
     auto gpaRef = std::make_shared<ScanData>();
     gpaRef->mesh          = (*refIt)->mesh;
