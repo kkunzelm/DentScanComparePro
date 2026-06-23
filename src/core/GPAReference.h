@@ -39,6 +39,27 @@ struct MeanMeshParams {
     bool verbose = true;
 };
 
+// Result of mean mesh computation including coverage information.
+// The coverage mask indicates which reference vertices have good coverage
+// from all/most scans - only these should be used for metric computation.
+struct MeanMeshResult {
+    // Per-vertex coverage mask: true if the vertex has sufficient coverage
+    // (enough scans contributed valid correspondences during mean mesh computation).
+    // Size equals reference mesh vertex count.
+    std::vector<bool> vertexCoverageMask;
+
+    // Per-face coverage mask derived from vertex mask: true if all 3 vertices
+    // of the face have good coverage. Use this when querying closest points
+    // to filter out faces in poorly-covered regions (gingiva, scan boundaries).
+    std::vector<bool> faceCoverageMask;
+
+    // Statistics
+    std::size_t validVertexCount = 0;
+    std::size_t totalVertexCount = 0;
+    std::size_t validFaceCount = 0;
+    std::size_t totalFaceCount = 0;
+};
+
 struct Params {
     int    maxGPAIterations   = 20;
     double convergenceThresh  = 0.01;  // [mm] max mean displacement of reference
@@ -77,19 +98,31 @@ struct Params {
 //
 // These checks prevent artifacts (stretched triangles, self-intersections) in
 // regions where scans have holes or inconsistent coverage.
-void updateMeanMesh(
+//
+// Returns MeanMeshResult containing coverage masks that indicate which vertices/faces
+// have good coverage from all scans. Use these masks to filter metric computation
+// and exclude gingiva/boundary regions that aren't consistently captured.
+MeanMeshResult updateMeanMesh(
     ScanData& gpaRef,
     const std::vector<std::shared_ptr<ScanData>>& scans,
     const MeanMeshParams& params = {});
+
+// Result of GPA computation including reference mesh and coverage information.
+struct GPAResult {
+    std::shared_ptr<ScanData> reference;  // The GPA reference surface
+    MeanMeshResult coverage;              // Coverage masks for filtering metrics
+};
 
 // Runs Generalized Procrustes Analysis on all scans.
 // - Picks the scan with the most triangles as initial reference.
 // - Iteratively: register all to reference, compute new reference as mean,
 //   check convergence.
 // - Applies the final transforms in-place to scan->mesh.
-// - Returns the GPA reference surface.
+// - Returns GPAResult containing the reference surface and coverage masks.
+//   The coverage masks indicate which reference vertices/faces are consistently
+//   captured by all scans - use these to filter out gingiva and boundary regions.
 // progressCallback(gpaCycle, scanIndex, icpRms) is called each ICP step.
-std::shared_ptr<ScanData> compute(
+GPAResult compute(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const Params& params = {},
     std::function<void(int, int, double)> progressCallback = nullptr

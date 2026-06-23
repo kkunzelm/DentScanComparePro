@@ -29,10 +29,26 @@ struct OcclusalPlane {
  * Pre-built AABB tree for efficient distance queries against a reference mesh.
  * Use this when computing distances from multiple scans to the same reference.
  * Building the tree once and reusing it is much faster for large reference meshes.
+ *
+ * Optionally accepts a face coverage mask to filter out vertices whose closest
+ * reference point falls on an uncovered face (e.g., gingiva or scan boundary regions).
  */
 class ReferenceTree {
 public:
+    /**
+     * Construct with reference mesh only (no coverage filtering).
+     */
     explicit ReferenceTree(const SurfaceMesh& referenceMesh);
+
+    /**
+     * Construct with reference mesh and face coverage mask.
+     * @param referenceMesh The reference surface
+     * @param faceCoverageMask Per-face bool: true if face has good coverage
+     *        (from GPAReference::MeanMeshResult). Empty mask disables filtering.
+     */
+    ReferenceTree(const SurfaceMesh& referenceMesh,
+                  const std::vector<bool>& faceCoverageMask);
+
     ~ReferenceTree();
 
     // Non-copyable but movable
@@ -44,6 +60,8 @@ public:
     /**
      * Compute signed distances from scan vertices to this reference.
      * Results stored in scan->distanceToRef.
+     * If coverage mask was provided, scan->distanceValidMask is also populated:
+     * true for vertices whose closest face has good coverage, false otherwise.
      */
     void computeDistances(ScanData& scan) const;
 
@@ -55,9 +73,23 @@ public:
     std::vector<double> computePairwiseDistances(const SurfaceMesh& sourceMesh) const;
 
     /**
+     * Compute distances with coverage validity mask.
+     * @param sourceMesh Source mesh to compute distances from
+     * @param validityOut Output: per-vertex validity (true if closest face has coverage)
+     * @return Per-vertex signed distances
+     */
+    std::vector<double> computePairwiseDistances(const SurfaceMesh& sourceMesh,
+                                                  std::vector<bool>& validityOut) const;
+
+    /**
      * Get the reference mesh (for normal computation).
      */
     const SurfaceMesh& mesh() const;
+
+    /**
+     * Check if this tree has a coverage mask.
+     */
+    bool hasCoverageMask() const;
 
 private:
     std::unique_ptr<ReferenceTreeImpl> m_impl;

@@ -215,9 +215,13 @@ Eigen::Vector3d computeFaceNormal(const SurfaceMesh& mesh, SurfaceMesh::Face_ind
 // - Distance rejection: skip closest points farther than maxCorrespondenceDistance
 // - Normal consistency: skip closest points with significantly different normals
 // - Minimum coverage: keep original position if too few scans have valid data
-void updateToMeanMesh(ScanData& gpaRef,
-                      const std::vector<std::shared_ptr<ScanData>>& scans,
-                      const MeanMeshParams& params)
+//
+// Returns MeanMeshResult with coverage masks indicating which vertices/faces
+// have consistent coverage across all scans. Use these masks to filter out
+// gingiva and boundary regions from metric computation.
+MeanMeshResult updateToMeanMesh(ScanData& gpaRef,
+                                const std::vector<std::shared_ptr<ScanData>>& scans,
+                                const MeanMeshParams& params)
 {
     using Primitive  = CGAL::AABB_face_graph_triangle_primitive<SurfaceMesh>;
     using AABBTraits = CGAL::AABB_traits_3<Kernel, Primitive>;
@@ -377,7 +381,11 @@ void updateToMeanMesh(ScanData& gpaRef,
         }
     });
 
-    // Apply results to mesh (single-threaded, safe)
+    // Apply results to mesh and build vertex coverage mask (single-threaded, safe)
+    MeanMeshResult coverageResult;
+    coverageResult.vertexCoverageMask.resize(nVerts, false);
+    coverageResult.totalVertexCount = nVerts;
+
     for (std::size_t i = 0; i < nVerts; ++i) {
         const VertexResult& res = results[i];
         totalDistanceRejections += res.distReject;
@@ -386,44 +394,79 @@ void updateToMeanMesh(ScanData& gpaRef,
         if (res.valid) {
             gpaRef.mesh.point(vertexList[i]) = res.newPos;
             totalVerticesUpdated++;
+            coverageResult.vertexCoverageMask[i] = true;
         } else {
             totalInsufficientCoverage++;
+            // Mark as invalid (already false by default)
         }
     }
+    coverageResult.validVertexCount = totalVerticesUpdated.load();
+
+    // Build face coverage mask: a face is valid only if ALL 3 vertices are valid
+    // This ensures we exclude faces in boundary/gingiva regions from metric computation
+    const std::size_t nFaces = gpaRef.mesh.num_faces();
+    coverageResult.faceCoverageMask.resize(nFaces, false);
+    coverageResult.totalFaceCount = nFaces;
+
+    std::size_t validFaces = 0;
+    for (auto f : gpaRef.mesh.faces()) {
+        auto h = gpaRef.mesh.halfedge(f);
+        auto v0 = gpaRef.mesh.source(h);
+        auto v1 = gpaRef.mesh.target(h);
+        auto v2 = gpaRef.mesh.target(gpaRef.mesh.next(h));
+
+        bool allValid = coverageResult.vertexCoverageMask[v0.idx()] &&
+                        coverageResult.vertexCoverageMask[v1.idx()] &&
+                        coverageResult.vertexCoverageMask[v2.idx()];
+
+        if (allValid) {
+            coverageResult.faceCoverageMask[f.idx()] = true;
+            validFaces++;
+        }
+    }
+    coverageResult.validFaceCount = validFaces;
 
     std::cout << "\n    Mean mesh: done\n" << std::flush;
 
     // Report statistics
-    if (params.verbose && (useDistanceRejection || useNormalConsistency)) {
+    if (params.verbose) {
         std::cout << "    Mean mesh statistics:\n"
-                  << "      Vertices updated:        " << totalVerticesUpdated
-                  << " / " << nVerts << "\n"
-                  << "      Vertices kept original:  " << totalInsufficientCoverage
-                  << " (insufficient coverage)\n"
-                  << "      Distance rejections:     " << totalDistanceRejections
-                  << " (across all vertices)\n"
-                  << "      Normal rejections:       " << totalNormalRejections
-                  << " (across all vertices)\n" << std::flush;
+                  << "      Vertices with good coverage: " << coverageResult.validVertexCount
+                  << " / " << nVerts << " ("
+                  << std::fixed << std::setprecision(1)
+                  << (100.0 * coverageResult.validVertexCount / nVerts) << "%)\n"
+                  << "      Faces with good coverage:    " << validFaces
+                  << " / " << nFaces << " ("
+                  << (100.0 * validFaces / nFaces) << "%)\n";
+        if (useDistanceRejection || useNormalConsistency) {
+            std::cout << "      Distance rejections:         " << totalDistanceRejections
+                      << " (across all vertices)\n"
+                      << "      Normal rejections:           " << totalNormalRejections
+                      << " (across all vertices)\n";
+        }
+        std::cout << std::flush;
     }
+
+    return coverageResult;
 }
 
 } // namespace
 
 // ─── Public mean-mesh update ─────────────────────────────────────────────────
-void updateMeanMesh(ScanData& gpaRef,
-                    const std::vector<std::shared_ptr<ScanData>>& scans,
-                    const MeanMeshParams& params)
+MeanMeshResult updateMeanMesh(ScanData& gpaRef,
+                              const std::vector<std::shared_ptr<ScanData>>& scans,
+                              const MeanMeshParams& params)
 {
-    updateToMeanMesh(gpaRef, scans, params);
+    return updateToMeanMesh(gpaRef, scans, params);
 }
 
 // ─── Main GPA entry point ────────────────────────────────────────────────────
-std::shared_ptr<ScanData> compute(
+GPAResult compute(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const Params& params,
     std::function<void(int, int, double)> progressCallback)
 {
-    if (scans.empty()) return nullptr;
+    if (scans.empty()) return {nullptr, {}};
 
     // Step 1: PCA coarse alignment (handles large translational + moderate
     //         rotational offsets between scanner coordinate systems).
@@ -468,6 +511,9 @@ std::shared_ptr<ScanData> compute(
     coarseP.maxCorrespDist = 15.0;
     coarseP.maxIterations  = 30;
     coarseP.convergenceRms = 0.05;
+
+    // Track coverage result from the final mean mesh update
+    MeanMeshResult lastCoverage;
 
     for (int cycle = 0; cycle < params.maxGPAIterations; ++cycle) {
         std::cout << "    GPA cycle " << (cycle + 1) << "/" << params.maxGPAIterations
@@ -534,6 +580,7 @@ std::shared_ptr<ScanData> compute(
 
         // Update reference to mean mesh (GPA mode only) and measure convergence
         // as the max vertex displacement of the reference — not the ICP residual.
+        // Store the last coverage result from the final iteration.
         double refDisp = 0.0;
         if (params.fixedRefScannerName.empty()) {
             std::vector<Point3> oldPos;
@@ -541,7 +588,7 @@ std::shared_ptr<ScanData> compute(
             for (auto v : gpaRef->mesh.vertices())
                 oldPos.push_back(gpaRef->mesh.point(v));
 
-            updateToMeanMesh(*gpaRef, scans, params.meanMeshParams);
+            lastCoverage = updateToMeanMesh(*gpaRef, scans, params.meanMeshParams);
 
             std::size_t idx = 0;
             for (auto v : gpaRef->mesh.vertices()) {
@@ -562,7 +609,7 @@ std::shared_ptr<ScanData> compute(
         if (refDisp < params.convergenceThresh) break;
     }
 
-    return gpaRef;
+    return {gpaRef, lastCoverage};
 }
 
 } // namespace GPAReference

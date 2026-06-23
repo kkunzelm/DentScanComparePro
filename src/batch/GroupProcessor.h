@@ -10,6 +10,7 @@
 #include "../core/Mesh.h"
 #include "../core/MetricReport.h"
 #include "../core/ToothSegmentation.h"
+#include "../core/GPAReference.h"
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -58,6 +59,12 @@ struct GroupResult {
     std::vector<BatchMetricReport> truenessReports;  // One per scan
     std::vector<PrecisionReport> precisionReports;   // One per scanner
     std::shared_ptr<SurfaceMesh> gpaMean;            // GPA mean reference mesh
+
+    // Coverage mask from GPA mean mesh computation - indicates which reference
+    // faces have consistent coverage across all scans. Used to filter out
+    // gingiva and boundary regions that aren't reliably captured.
+    GPAReference::MeanMeshResult coverageResult;
+
     QStringList warnings;
     QStringList errors;
     bool success = false;
@@ -152,6 +159,7 @@ private:
     bool runGPAAlignment(std::vector<std::shared_ptr<ScanData>>& scans,
                          const AlignmentConfig& alignment,
                          std::shared_ptr<SurfaceMesh>& gpaMean,
+                         GPAReference::MeanMeshResult& coverageOut,
                          GroupResult& result,
                          bool scansNormalized = false,
                          const std::vector<std::vector<bool>>& icpMasks = {});

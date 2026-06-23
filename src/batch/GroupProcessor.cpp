@@ -326,11 +326,11 @@ GroupResult GroupProcessor::process(
 
             ScanData gpaMeanData;
             gpaMeanData.mesh = (*refIt)->mesh;
-            GPAReference::updateMeanMesh(gpaMeanData, scans);
+            result.coverageResult = GPAReference::updateMeanMesh(gpaMeanData, scans);
             referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
         } else {
             // Run GPA alignment (passes icpMasks so GPA iterations also use masked ICP)
-            if (!runGPAAlignment(scans, alignment, referenceMesh, result, scansNormalized, icpMasks)) {
+            if (!runGPAAlignment(scans, alignment, referenceMesh, result.coverageResult, result, scansNormalized, icpMasks)) {
                 return result;
             }
         }
@@ -522,6 +522,7 @@ bool GroupProcessor::runGPAAlignment(
     std::vector<std::shared_ptr<ScanData>>& scans,
     const AlignmentConfig& alignment,
     std::shared_ptr<SurfaceMesh>& gpaMean,
+    GPAReference::MeanMeshResult& coverageOut,
     GroupResult& result,
     bool scansNormalized,
     const std::vector<std::vector<bool>>& icpMasks)
@@ -557,15 +558,22 @@ bool GroupProcessor::runGPAAlignment(
     params.scanMasks = icpMasks;
 
     // Run GPA
-    auto gpaRef = GPAReference::compute(scans, params);
+    auto gpaResult = GPAReference::compute(scans, params);
 
-    if (!gpaRef) {
+    if (!gpaResult.reference) {
         result.errors.append("GPA alignment failed");
         return false;
     }
 
-    // Extract the mesh from the GPA result
-    gpaMean = std::make_shared<SurfaceMesh>(gpaRef->mesh);
+    // Extract the mesh and coverage from the GPA result
+    gpaMean = std::make_shared<SurfaceMesh>(gpaResult.reference->mesh);
+    coverageOut = std::move(gpaResult.coverage);
+
+    std::cout << "    GPA coverage: " << coverageOut.validFaceCount << "/"
+              << coverageOut.totalFaceCount << " faces ("
+              << std::fixed << std::setprecision(1)
+              << (100.0 * coverageOut.validFaceCount / std::max(coverageOut.totalFaceCount, std::size_t(1)))
+              << "%) have consistent coverage across all scans\n" << std::flush;
 
     // Mark all scans as registered
     for (auto& scan : scans) {
@@ -639,7 +647,13 @@ bool GroupProcessor::computeDistances(
             return false;
         }
 
-        DistanceField::ReferenceTree refTree(*gpaMean);
+        // Build reference tree with coverage mask to filter out gingiva/boundary regions
+        // where not all scans have consistent data
+        DistanceField::ReferenceTree refTree(*gpaMean, result.coverageResult.faceCoverageMask);
+        if (refTree.hasCoverageMask()) {
+            std::cout << "    Using coverage mask: " << result.coverageResult.validFaceCount
+                      << "/" << result.coverageResult.totalFaceCount << " faces\n" << std::flush;
+        }
         std::cout << "    Computing distances (parallel)..." << std::flush;
 
         QMutex warningMutex;

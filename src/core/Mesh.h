@@ -45,6 +45,14 @@ struct ScanData {
     std::vector<double> distanceToRef;    // signed distance [mm]
     bool distanceComputed = false;
 
+    // --- per-vertex validity mask for distanceToRef ---
+    // When computed with a coverage mask, indicates which vertices have their
+    // closest reference point on a face with good coverage. Vertices with
+    // distanceValidMask[i]==false should be excluded from metric computation
+    // (they likely correspond to gingiva or boundary regions).
+    // Empty if no coverage mask was used.
+    std::vector<bool> distanceValidMask;
+
     // --- distance from mask STL vertices to this scan (for trueness metrics) ---
     // One entry per mask vertex: maskDistances[i] = signed distance from mask vertex i
     // to nearest point on this scan surface. Empty when no mask STL is used.
