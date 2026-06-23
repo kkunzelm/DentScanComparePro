@@ -62,3 +62,4 @@ scripts/howto-reorganize_scans_Nold.txt
 
 # Study-specific data files with individual paths (use *_generic.* versions instead)
 data/P2026-Nold-study.json
+resources/
