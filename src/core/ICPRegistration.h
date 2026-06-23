@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "Defaults.h"
 #include "Mesh.h"
 #include <Eigen/Core>
 #include <functional>
@@ -10,8 +11,9 @@
 
 namespace ICPRegistration {
 
+// Default values are defined in Defaults.h for consistency across the codebase.
 struct Params {
-    int    maxIterations   = 100;
+    int    maxIterations   = Defaults::kMaxIcpIterations;
     double convergenceRms  = 1e-4;   // [mm] stop when ΔRMS < this
     int    sampleCount     = 20000;  // points to sample from each mesh
     double maxCorrespDist  = 5.0;    // [mm] reject correspondences further than this
@@ -19,17 +21,16 @@ struct Params {
     // sorted by point-to-plane residual (smallest first).  Discards the worst
     // correspondences — typically deforming soft tissue (gingiva, palate) —
     // so the rigid solve focuses on stable surfaces (teeth).
-    // 1.0 = no trimming (default); 0.5 = keep 50% (aggressive, high soft-tissue).
-    double trimFraction    = 1.0;
+    double trimFraction    = Defaults::kIcpTrimFraction;
 
     // Resolution hierarchy (coarse-to-fine, Xi-2025 decimation):
     // Each entry is a face fraction (0,1] — mesh is decimated to that fraction for
     // that level.  Last entry should be 1.0 (full-resolution fine pass).
     // Hierarchy is only used by alignHierarchical() / alignMaskedHierarchical().
-    bool                useHierarchy    = false;
+    bool                useHierarchy    = Defaults::kUseIcpHierarchy;
     std::vector<double> hierarchyLevels = {0.05, 0.20, 1.0};
     // Xi-2025 boundary-preservation weight: cost × negCurvK for negative-curvature edges.
-    double              negCurvK        = 10.0;
+    double              negCurvK        = Defaults::kIcpHierarchyNegCurvK;
 };
 
 // Result of one ICP run

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "Defaults.h"
 #include "Mesh.h"
 #include "ICPRegistration.h"
 #include <functional>
@@ -18,33 +19,26 @@ namespace GPAReference {
 // The defaults are tuned for a "boolean AND" intersection approach that
 // excludes gingiva and soft tissue regions not consistently captured
 // across all scans.
+//
+// NOTE: Default values are defined in Defaults.h to ensure consistency
+// with StudyConfig. Change defaults there, not here.
 struct MeanMeshParams {
     // Maximum distance [mm] for a closest point to be considered valid.
     // If a scan's closest point is farther than this, the scan likely has a
     // hole at this location and is excluded from the average for this vertex.
     // Set to 0 to disable distance rejection.
-    //
-    // For strict gingiva exclusion (intersection mode): use 0.1-0.15 mm
-    // For artifact prevention only: use 0.5 mm
-    double maxCorrespondenceDistance = 0.15;  // Strict default for intersection
+    double maxCorrespondenceDistance = Defaults::kMeanMeshMaxDistance;
 
     // Minimum dot product between reference vertex normal and scan surface
     // normal at the closest point. Values near 1.0 require nearly parallel
     // normals; 0.5 allows up to ~60° deviation; 0.0 disables normal checking.
-    // When a scan has a hole, the closest point may be on a surface facing
-    // a completely different direction — this check catches such cases.
-    double minNormalDotProduct = 0.5;
+    double minNormalDotProduct = Defaults::kMeanMeshMinNormalDot;
 
     // Minimum fraction of scans that must have valid correspondences for a
     // vertex to be updated. If fewer scans pass the distance and normal
     // checks, the vertex position is kept unchanged (original template
     // position). Range: 0.0 to 1.0.
-    //
-    // For strict gingiva exclusion (intersection mode): use 0.9-1.0
-    //   - 1.0 = ALL scans must have data (true boolean AND)
-    //   - 0.9 = 90% of scans must have data (allows one outlier scan)
-    // For artifact prevention only: use 0.5
-    double minValidScansFraction = 0.9;  // Strict default for intersection
+    double minValidScansFraction = Defaults::kMeanMeshMinCoverage;
 
     // Enable verbose logging of rejection statistics.
     bool verbose = true;
@@ -72,8 +66,8 @@ struct MeanMeshResult {
 };
 
 struct Params {
-    int    maxGPAIterations   = 20;
-    double convergenceThresh  = 0.01;  // [mm] max mean displacement of reference
+    int    maxGPAIterations   = Defaults::kMaxGpaIterations;
+    double convergenceThresh  = Defaults::kConvergenceThreshold;  // [mm]
     ICPRegistration::Params icpParams;
 
     // If non-empty: use this scanner name as a fixed reference instead of

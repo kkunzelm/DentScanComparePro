@@ -5,6 +5,7 @@
 #define STUDYCONFIG_H
 
 #include "ROIConfig.h"
+#include "../core/Defaults.h"
 #include <QString>
 #include <QStringList>
 #include <vector>
@@ -35,46 +36,35 @@ struct GroupConfig {
 
 /**
  * Alignment parameters for ICP registration.
+ * Default values are defined in Defaults.h for consistency across the codebase.
  */
 struct AlignmentConfig {
-    int maxIcpIterations = 100;
-    double convergenceThreshold = 0.01;  // mm
+    int maxIcpIterations = Defaults::kMaxIcpIterations;
+    double convergenceThreshold = Defaults::kConvergenceThreshold;  // mm
     bool usePcaCoarse = true;
     bool use4OrientationTest = true;
     // TrICP trim fraction: keep only this fraction of correspondences with the
     // smallest point-to-plane residuals (1.0 = no trimming; 0.5 = keep 50%).
     // Lower values reject more soft-tissue deformation but need stable overlap.
-    double icpTrimFraction = 1.0;
+    double icpTrimFraction = Defaults::kIcpTrimFraction;
 
     // Resolution hierarchy ICP (coarse-to-fine):
     // Each level specifies the fraction of source faces to keep (0,1].
     // The last level must be 1.0 (full-resolution final pass).
     // Enabled by --icp-hierarchy CLI flag or the GUI checkbox.
-    bool useIcpHierarchy = false;
+    bool useIcpHierarchy = Defaults::kUseIcpHierarchy;
     std::vector<double> icpHierarchyLevels = {0.05, 0.20, 1.0};
     // Xi-2025 boundary-preservation weight for curvature-weighted QEM:
     // edges with negative mean curvature get cost × negCurvK (default 10).
-    double icpHierarchyNegCurvK = 10.0;
+    double icpHierarchyNegCurvK = Defaults::kIcpHierarchyNegCurvK;
 
     // --- Mean mesh / coverage filtering parameters ---
     // These control the "boolean AND" intersection approach for excluding
     // gingiva and soft tissue regions not consistently captured across scans.
-    //
-    // Maximum distance [mm] for a closest point to be valid during mean mesh
-    // computation. Smaller values = stricter intersection (excludes more).
-    // - 0.15 mm (default): strict intersection for gingiva exclusion
-    // - 0.5 mm: permissive, for artifact prevention only
-    double meanMeshMaxDistance = 0.15;
-
-    // Minimum fraction of scans that must have valid correspondences for a
-    // vertex to be included in the coverage mask. Range: 0.0 to 1.0.
-    // - 0.9-1.0 (default): strict intersection (all/most scans must agree)
-    // - 0.5: permissive, allows 50% of scans to have holes
-    double meanMeshMinCoverage = 0.9;
-
-    // Minimum normal dot product for correspondence validity (0.0 to 1.0).
-    // 0.5 = allow up to ~60° deviation; 0.0 = disable normal checking.
-    double meanMeshMinNormalDot = 0.5;
+    // See Defaults.h for value documentation.
+    double meanMeshMaxDistance = Defaults::kMeanMeshMaxDistance;
+    double meanMeshMinCoverage = Defaults::kMeanMeshMinCoverage;
+    double meanMeshMinNormalDot = Defaults::kMeanMeshMinNormalDot;
 };
 
 /**
