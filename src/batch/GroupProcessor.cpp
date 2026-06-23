@@ -326,7 +326,18 @@ GroupResult GroupProcessor::process(
 
             ScanData gpaMeanData;
             gpaMeanData.mesh = (*refIt)->mesh;
-            result.coverageResult = GPAReference::updateMeanMesh(gpaMeanData, scans);
+            // Use configured mean mesh parameters for coverage filtering
+            GPAReference::MeanMeshParams meanParams;
+            meanParams.maxCorrespondenceDistance = alignment.meanMeshMaxDistance;
+            meanParams.minValidScansFraction     = alignment.meanMeshMinCoverage;
+            meanParams.minNormalDotProduct       = alignment.meanMeshMinNormalDot;
+            result.coverageResult = GPAReference::updateMeanMesh(gpaMeanData, scans, meanParams);
+
+            // Extract only covered faces - removes gingiva and soft tissue artifacts
+            if (!result.coverageResult.faceCoverageMask.empty()) {
+                gpaMeanData.mesh = GPAReference::extractCoveredFaces(
+                    gpaMeanData.mesh, result.coverageResult.faceCoverageMask);
+            }
             referenceMesh = std::make_shared<SurfaceMesh>(gpaMeanData.mesh);
         } else {
             // Run GPA alignment (passes icpMasks so GPA iterations also use masked ICP)
@@ -556,6 +567,11 @@ bool GroupProcessor::runGPAAlignment(
     params.icpParams.hierarchyLevels = alignment.icpHierarchyLevels;
     params.icpParams.negCurvK       = alignment.icpHierarchyNegCurvK;
     params.scanMasks = icpMasks;
+
+    // Mean mesh / coverage filtering parameters (gingiva exclusion)
+    params.meanMeshParams.maxCorrespondenceDistance = alignment.meanMeshMaxDistance;
+    params.meanMeshParams.minValidScansFraction     = alignment.meanMeshMinCoverage;
+    params.meanMeshParams.minNormalDotProduct       = alignment.meanMeshMinNormalDot;
 
     // Run GPA
     auto gpaResult = GPAReference::compute(scans, params);
@@ -846,6 +862,10 @@ void GroupProcessor::computeTruenessMetrics(
                 double absD = std::abs(d);
                 if (!geoMask.empty() && i < geoMask.size() && !geoMask[i]) continue;
                 if (toothMask && i < toothMask->size() && !(*toothMask)[i]) continue;
+                // Coverage mask: exclude vertices whose closest reference point is on
+                // an uncovered face (gingiva, soft tissue, scan boundary regions)
+                if (!scan->distanceValidMask.empty() && i < scan->distanceValidMask.size()
+                    && !scan->distanceValidMask[i]) continue;
                 distances.push_back(d);
                 absDistances.push_back(absD);
             }

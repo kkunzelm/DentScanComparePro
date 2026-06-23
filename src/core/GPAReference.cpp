@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <unordered_map>
 
 namespace GPAReference {
 
@@ -452,6 +453,51 @@ MeanMeshResult updateToMeanMesh(ScanData& gpaRef,
 
 } // namespace
 
+// ─── Extract covered faces into a clean mesh ─────────────────────────────────
+SurfaceMesh extractCoveredFaces(const SurfaceMesh& mesh,
+                                 const std::vector<bool>& faceCoverageMask)
+{
+    if (faceCoverageMask.empty() || faceCoverageMask.size() != mesh.number_of_faces()) {
+        // No mask or size mismatch - return copy of original mesh
+        return mesh;
+    }
+
+    SurfaceMesh result;
+    std::unordered_map<std::size_t, SurfaceMesh::Vertex_index> vertexMap;
+
+    std::size_t faceIdx = 0;
+    for (auto f : mesh.faces()) {
+        if (!faceCoverageMask[faceIdx]) {
+            ++faceIdx;
+            continue;
+        }
+
+        auto h = mesh.halfedge(f);
+        auto v0 = mesh.source(h);
+        auto v1 = mesh.target(h);
+        auto v2 = mesh.target(mesh.next(h));
+
+        // Add vertices if not already in the new mesh
+        for (auto v : {v0, v1, v2}) {
+            if (vertexMap.find(v.idx()) == vertexMap.end()) {
+                vertexMap[v.idx()] = result.add_vertex(mesh.point(v));
+            }
+        }
+
+        // Add the face
+        result.add_face(vertexMap[v0.idx()], vertexMap[v1.idx()], vertexMap[v2.idx()]);
+        ++faceIdx;
+    }
+
+    std::cout << "    Extracted covered faces: " << result.number_of_faces()
+              << " / " << mesh.number_of_faces() << " ("
+              << std::fixed << std::setprecision(1)
+              << (100.0 * result.number_of_faces() / mesh.number_of_faces()) << "%)\n"
+              << std::flush;
+
+    return result;
+}
+
 // ─── Public mean-mesh update ─────────────────────────────────────────────────
 MeanMeshResult updateMeanMesh(ScanData& gpaRef,
                               const std::vector<std::shared_ptr<ScanData>>& scans,
@@ -607,6 +653,15 @@ GPAResult compute(
                   << std::flush;
 
         if (refDisp < params.convergenceThresh) break;
+    }
+
+    // Extract only covered faces into a clean mesh - this removes gingiva,
+    // soft tissue, and boundary regions where not all scans have consistent data.
+    // The returned reference mesh will contain only the "boolean AND" intersection
+    // of all scan coverages.
+    if (!lastCoverage.faceCoverageMask.empty()) {
+        gpaRef->mesh = extractCoveredFaces(gpaRef->mesh, lastCoverage.faceCoverageMask);
+        gpaRef->triangleCount = gpaRef->mesh.number_of_faces();
     }
 
     return {gpaRef, lastCoverage};

@@ -144,9 +144,24 @@ Vertices that fail this check retain their original position from the template s
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `maxCorrespondenceDistance` | 0.5 mm | Maximum distance for a closest point to be valid |
+| `maxCorrespondenceDistance` | **0.15 mm** | Maximum distance for a closest point to be valid |
 | `minNormalDotProduct` | 0.5 | Minimum normal alignment (~60° max deviation) |
-| `minValidScansFraction` | 0.5 | At least 50% of scans must have valid data |
+| `minValidScansFraction` | **0.9** | At least 90% of scans must have valid data |
+
+The defaults are tuned for a **"boolean AND" intersection approach** that automatically excludes gingiva and soft tissue regions not consistently captured across all scans. This produces cleaner reference meshes without requiring manual ROI definition for each patient.
+
+**YAML configuration**
+
+These parameters can be configured in the study YAML file under `study.alignment`:
+
+```yaml
+study:
+  alignment:
+    # Coverage filtering for gingiva exclusion ("boolean AND" intersection)
+    mean_mesh_max_distance_mm: 0.15   # Strict: 0.10-0.15, Permissive: 0.5
+    mean_mesh_min_coverage: 0.9       # Strict: 0.9-1.0, Permissive: 0.5
+    mean_mesh_min_normal_dot: 0.5     # Normal consistency (0.0 to disable)
+```
 
 **Console output and diagnostics**
 
@@ -154,23 +169,31 @@ When robust averaging is active, the software reports statistics:
 
 ```
 Mean mesh statistics:
-  Vertices updated:        45230 / 48000
-  Vertices kept original:  2770 (insufficient coverage)
-  Distance rejections:     12450 (across all vertices)
-  Normal rejections:       3200 (across all vertices)
+  Vertices with good coverage: 42150 / 48000 (87.8%)
+  Faces with good coverage:    83200 / 96000 (86.7%)
+  Distance rejections:         12450 (across all vertices)
+  Normal rejections:           3200 (across all vertices)
+
+GPA coverage: 83200/96000 faces (86.7%) have consistent coverage across all scans
+Using coverage mask: 83200/96000 faces
 ```
 
-These statistics help identify problematic regions. A high number of "vertices kept original" indicates regions where scan coverage is inconsistent — typically molar fissures, interproximal contacts, and scan boundaries.
+Vertices and faces marked as having "good coverage" are used for metric computation. Those without coverage (typically gingiva, soft tissue, and scan boundary regions) are automatically excluded.
 
 **Tuning for specific datasets**
 
-If artifacts persist, the parameters can be adjusted:
+The parameters can be adjusted depending on the desired filtering strictness:
 
-- **Tighter distance threshold** (e.g., 0.3 mm): More aggressive rejection of distant correspondences. Use when scans are well-aligned but have small holes.
-- **Stricter normal consistency** (e.g., 0.7): Allows only ~45° deviation. Use when holes cause closest points to land on perpendicular surfaces.
-- **Higher coverage requirement** (e.g., 0.6 or 0.7): Requires more scans to agree before updating a vertex. Use when individual scans have significant local errors.
+| Use Case | `mean_mesh_max_distance_mm` | `mean_mesh_min_coverage` |
+|----------|----------------------------|--------------------------|
+| **Strict gingiva exclusion** (default) | 0.10 – 0.15 | 0.9 – 1.0 |
+| **Moderate filtering** | 0.2 – 0.3 | 0.7 – 0.8 |
+| **Artifact prevention only** | 0.5 | 0.5 |
 
-These parameters are configured in the `MeanMeshParams` structure and can be adjusted programmatically or via study configuration.
+- **Stricter values** exclude more tissue but may also exclude valid tooth surfaces near scan boundaries.
+- **More permissive values** include more tissue but may leave some gingiva artifacts in the reference.
+
+These parameters are configured in the `MeanMeshParams` structure and can be adjusted via the study YAML configuration.
 
 #### The Mean Mesh as Accepted Reference Value
 
@@ -549,9 +572,21 @@ All formulas below use the notation introduced in the preceding sections: M = nu
 
    **Mitigation:** The software now implements **robust averaging** with outlier rejection (see Section 3.1, "Robust Mean Mesh Computation"). Distance-based rejection, normal consistency checking, and minimum coverage thresholds significantly reduce these artifacts by excluding invalid correspondences from the average. Vertices with insufficient valid coverage retain their original template position rather than being pulled to an unreliable average.
 
-   However, the implementation does not perform mesh repair after averaging. No self-intersection removal, smoothing, or triangle quality optimisation is applied. Residual artifacts may still occur in regions where all or most scans have poor coverage.
+   **Automatic face extraction:** After coverage analysis, the software now **physically removes** uncovered faces from the reference mesh rather than just flagging them. The `extractCoveredFaces()` function creates a clean mesh containing only faces where all three vertices have good coverage. This eliminates gingiva, soft tissue, and boundary artifacts from the reference mesh itself — the exported STL contains only the "boolean AND" intersection of all scan coverages.
+
+   This approach has two advantages over masking:
+   1. The exported reference mesh is clean and can be directly inspected in external tools
+   2. No downstream code needs to handle coverage masks — the mesh itself is already filtered
 
    **Impact on metrics:** Because the ROI mask mesh is derived from the mean mesh, artifacts in the mean mesh propagate to the mask. Queries from distorted mask vertices to scan surfaces may produce spurious distance values. However, the effect is typically localised to small regions, and the RMS and MAD metrics — which average over thousands of vertices — are relatively robust to a small number of outlier distances. The sigma-clipping outlier removal (if enabled) further mitigates the impact.
+
+   **Multi-layer filtering in trueness computation:** When computing trueness metrics, the software applies multiple filtering layers in sequence:
+   1. **Geometric ROI** (if configured): bounding box, z-plane slab, brush zones
+   2. **Tooth segmentation mask** (if configured): curvature-based tooth/gingiva boundary
+   3. **Coverage validity mask**: excludes vertices whose closest reference point is on an uncovered face (gingiva, soft tissue, scan boundary regions)
+   4. **Sigma clipping** (if configured): statistical outlier removal
+
+   All four layers are now connected and operational, ensuring that soft tissue artifacts are excluded from metric computation even when no explicit ROI mask STL is provided.
 
 ---
 
@@ -563,19 +598,21 @@ The mean mesh artifacts described in Section 11.6 are addressed by a combination
 
 The software implements robust averaging with three rejection mechanisms (see Section 3.1 for full details):
 
-- **Distance-based rejection** ✓: If a closest point is farther than a threshold (default: 0.5 mm) from the current vertex position, exclude it from the average. This prevents vertices from being pulled toward unrelated surface regions when a scan has a hole.
+- **Distance-based rejection** ✓: If a closest point is farther than a threshold (default: 0.15 mm) from the current vertex position, exclude it from the average. This prevents vertices from being pulled toward unrelated surface regions when a scan has a hole.
 
 - **Normal consistency check** ✓: If the surface normal at the closest point differs significantly from the reference vertex normal (default: >60° deviation), exclude the correspondence. This catches cases where holes cause closest points to land on surfaces facing different directions.
 
-- **Minimum coverage threshold** ✓: If fewer than a minimum fraction of scans (default: 50%) have valid correspondences for a vertex, keep the original template position rather than computing an unreliable average.
+- **Minimum coverage threshold** ✓: If fewer than a minimum fraction of scans (default: 90%) have valid correspondences for a vertex, keep the original template position rather than computing an unreliable average.
 
-These mechanisms are controlled by the `MeanMeshParams` structure with configurable parameters:
+- **Automatic face extraction** ✓: After coverage analysis, faces where any vertex lacks good coverage are **physically removed** from the reference mesh via `extractCoveredFaces()`. The exported reference mesh contains only the "boolean AND" intersection — no gingiva or soft tissue artifacts.
+
+These mechanisms are controlled by the `MeanMeshParams` structure with configurable parameters (see Section 3.1 for YAML configuration):
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `maxCorrespondenceDistance` | 0.5 mm | Maximum distance for valid correspondence |
+| `maxCorrespondenceDistance` | **0.15 mm** | Maximum distance for valid correspondence |
 | `minNormalDotProduct` | 0.5 | Minimum normal alignment (~60° max deviation) |
-| `minValidScansFraction` | 0.5 | At least 50% of scans must have valid data |
+| `minValidScansFraction` | **0.9** | At least 90% of scans must have valid data |
 
 **Not yet implemented** from this category:
 - Trimmed mean (discard top/bottom 10% before averaging)
@@ -591,15 +628,19 @@ The current implementation uses binary weighting: a scan either contributes full
 
 Full coverage-based weighting would require computing local coverage and quality metrics for each scan, which adds computational cost but could improve robustness in regions with variable scan quality.
 
-### 12.3 Post-Averaging Mesh Repair (Not Yet Implemented)
+### 12.3 Post-Averaging Mesh Repair (Largely Addressed)
 
-After computing the mean mesh, mesh repair operations could further improve quality. These are **not yet implemented** but represent potential future work:
+After computing the mean mesh, mesh repair operations could further improve quality. The automatic face extraction (`extractCoveredFaces()`) largely addresses this need by **removing** problematic regions rather than trying to repair them:
+
+- **Uncovered face removal** ✓ **IMPLEMENTED**: Faces where any vertex lacks good coverage are physically removed from the mesh. This eliminates gingiva, soft tissue, and boundary artifacts without complex mesh repair algorithms.
+
+The following operations remain **not yet implemented** but may be useful for extreme cases:
 
 - **Self-intersection removal**: Detect and resolve triangles that intersect each other. CGAL provides algorithms for this (e.g., `CGAL::Polygon_mesh_processing::remove_self_intersections`).
 - **Smoothing / fairing**: Apply Laplacian smoothing or curvature-flow fairing to reduce high-frequency noise and improve triangle quality. This must be done carefully to avoid shrinking or distorting the surface.
 - **Re-meshing**: Generate a new triangulation with uniform triangle size and good aspect ratios. Isotropic remeshing algorithms (e.g., `CGAL::Polygon_mesh_processing::isotropic_remeshing`) can produce a cleaner mesh at the cost of losing the original vertex correspondence.
 
-Note: The robust averaging implemented in Section 12.1 significantly reduces the need for post-processing mesh repair by preventing most artifacts at the source.
+Note: The combination of robust averaging (Section 12.1) and automatic face extraction significantly reduces the need for post-processing mesh repair. Most artifacts are either prevented at the source (robust averaging) or removed from the output (face extraction).
 
 ### 12.4 Correspondence Improvement (Partially Implemented)
 

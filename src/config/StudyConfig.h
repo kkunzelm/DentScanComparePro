@@ -55,6 +55,26 @@ struct AlignmentConfig {
     // Xi-2025 boundary-preservation weight for curvature-weighted QEM:
     // edges with negative mean curvature get cost × negCurvK (default 10).
     double icpHierarchyNegCurvK = 10.0;
+
+    // --- Mean mesh / coverage filtering parameters ---
+    // These control the "boolean AND" intersection approach for excluding
+    // gingiva and soft tissue regions not consistently captured across scans.
+    //
+    // Maximum distance [mm] for a closest point to be valid during mean mesh
+    // computation. Smaller values = stricter intersection (excludes more).
+    // - 0.15 mm (default): strict intersection for gingiva exclusion
+    // - 0.5 mm: permissive, for artifact prevention only
+    double meanMeshMaxDistance = 0.15;
+
+    // Minimum fraction of scans that must have valid correspondences for a
+    // vertex to be included in the coverage mask. Range: 0.0 to 1.0.
+    // - 0.9-1.0 (default): strict intersection (all/most scans must agree)
+    // - 0.5: permissive, allows 50% of scans to have holes
+    double meanMeshMinCoverage = 0.9;
+
+    // Minimum normal dot product for correspondence validity (0.0 to 1.0).
+    // 0.5 = allow up to ~60° deviation; 0.0 = disable normal checking.
+    double meanMeshMinNormalDot = 0.5;
 };
 
 /**

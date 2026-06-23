@@ -165,6 +165,10 @@ StudyConfig StudyConfig::loadFromJSON(const QString& path) {
         for (const auto& v : align["icp_hierarchy_levels"].toArray())
             config.alignment.icpHierarchyLevels.push_back(v.toDouble());
     }
+    // Mean mesh / coverage filtering parameters (gingiva exclusion)
+    config.alignment.meanMeshMaxDistance = align["mean_mesh_max_distance_mm"].toDouble(0.15);
+    config.alignment.meanMeshMinCoverage = align["mean_mesh_min_coverage"].toDouble(0.9);
+    config.alignment.meanMeshMinNormalDot = align["mean_mesh_min_normal_dot"].toDouble(0.5);
 
     // Scanners
     auto scanners = root["scanners"].toArray();
@@ -293,6 +297,10 @@ void StudyConfig::saveToJSON(const QString& path) const {
         for (double l : alignment.icpHierarchyLevels) levelsArr.append(l);
         align["icp_hierarchy_levels"] = levelsArr;
     }
+    // Mean mesh / coverage filtering parameters (gingiva exclusion)
+    align["mean_mesh_max_distance_mm"] = alignment.meanMeshMaxDistance;
+    align["mean_mesh_min_coverage"] = alignment.meanMeshMinCoverage;
+    align["mean_mesh_min_normal_dot"] = alignment.meanMeshMinNormalDot;
     study["alignment"] = align;
 
     root["study"] = study;
@@ -557,6 +565,10 @@ StudyConfig StudyConfig::loadFromYAML(const QString& path) {
                 for (const auto& v : align["icp_hierarchy_levels"])
                     config.alignment.icpHierarchyLevels.push_back(v.as<double>());
             }
+            // Mean mesh / coverage filtering parameters (gingiva exclusion)
+            config.alignment.meanMeshMaxDistance = align["mean_mesh_max_distance_mm"].as<double>(0.15);
+            config.alignment.meanMeshMinCoverage = align["mean_mesh_min_coverage"].as<double>(0.9);
+            config.alignment.meanMeshMinNormalDot = align["mean_mesh_min_normal_dot"].as<double>(0.5);
         }
     }
 
@@ -640,6 +652,10 @@ void StudyConfig::saveToYAML(const QString& path) const {
     out << YAML::Key << "icp_hierarchy_levels" << YAML::Value << YAML::Flow << YAML::BeginSeq;
     for (double l : alignment.icpHierarchyLevels) out << l;
     out << YAML::EndSeq;
+    // Mean mesh / coverage filtering parameters (gingiva exclusion)
+    out << YAML::Key << "mean_mesh_max_distance_mm" << YAML::Value << alignment.meanMeshMaxDistance;
+    out << YAML::Key << "mean_mesh_min_coverage" << YAML::Value << alignment.meanMeshMinCoverage;
+    out << YAML::Key << "mean_mesh_min_normal_dot" << YAML::Value << alignment.meanMeshMinNormalDot;
     out << YAML::EndMap;
 
     out << YAML::EndMap;

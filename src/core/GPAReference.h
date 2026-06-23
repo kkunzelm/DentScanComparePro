@@ -14,12 +14,19 @@ namespace GPAReference {
 // Parameters for robust mean mesh computation.
 // These control outlier rejection to prevent artifacts from holes and
 // inconsistent scan coverage.
+//
+// The defaults are tuned for a "boolean AND" intersection approach that
+// excludes gingiva and soft tissue regions not consistently captured
+// across all scans.
 struct MeanMeshParams {
     // Maximum distance [mm] for a closest point to be considered valid.
     // If a scan's closest point is farther than this, the scan likely has a
     // hole at this location and is excluded from the average for this vertex.
     // Set to 0 to disable distance rejection.
-    double maxCorrespondenceDistance = 0.5;
+    //
+    // For strict gingiva exclusion (intersection mode): use 0.1-0.15 mm
+    // For artifact prevention only: use 0.5 mm
+    double maxCorrespondenceDistance = 0.15;  // Strict default for intersection
 
     // Minimum dot product between reference vertex normal and scan surface
     // normal at the closest point. Values near 1.0 require nearly parallel
@@ -31,9 +38,13 @@ struct MeanMeshParams {
     // Minimum fraction of scans that must have valid correspondences for a
     // vertex to be updated. If fewer scans pass the distance and normal
     // checks, the vertex position is kept unchanged (original template
-    // position). Range: 0.0 to 1.0. Value of 0.5 means at least 50% of scans
-    // must have valid coverage.
-    double minValidScansFraction = 0.5;
+    // position). Range: 0.0 to 1.0.
+    //
+    // For strict gingiva exclusion (intersection mode): use 0.9-1.0
+    //   - 1.0 = ALL scans must have data (true boolean AND)
+    //   - 0.9 = 90% of scans must have data (allows one outlier scan)
+    // For artifact prevention only: use 0.5
+    double minValidScansFraction = 0.9;  // Strict default for intersection
 
     // Enable verbose logging of rejection statistics.
     bool verbose = true;
@@ -106,6 +117,14 @@ MeanMeshResult updateMeanMesh(
     ScanData& gpaRef,
     const std::vector<std::shared_ptr<ScanData>>& scans,
     const MeanMeshParams& params = {});
+
+// Extract only faces with good coverage into a clean mesh.
+// This creates a new mesh containing only faces where all 3 vertices passed
+// the coverage test during mean mesh computation. Eliminates gingiva, soft
+// tissue, and boundary artifacts from the reference mesh itself.
+SurfaceMesh extractCoveredFaces(
+    const SurfaceMesh& mesh,
+    const std::vector<bool>& faceCoverageMask);
 
 // Result of GPA computation including reference mesh and coverage information.
 struct GPAResult {
